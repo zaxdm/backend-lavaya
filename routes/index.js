@@ -12,110 +12,23 @@ const serviciosController = require('../controllers/servicios.controller');
 // Import middlewares
 const { verifyToken, roleGuard, sucursalGuard } = require('../middlewares/auth.middleware');
 
+// Nuevas Rutas Modulares (V2)
+router.use('/sucursales', require('./sucursales.routes'));
+router.use('/auth', require('./auth.routes'));
+router.use('/usuarios', require('./usuarios.routes'));
+
 // Auth routes (no auth required)
 router.get('/servicios', serviciosController.listar);
 router.get('/servicios/categorias', serviciosController.listarCategorias);
-router.get('/sucursales', sucursales.listarSucursales);
-router.get('/sucursales/:id', sucursales.obtenerSucursal);
 
-router.post('/auth/login', [
-  body('email').isEmail().normalizeEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
-], authController.loginInterno);
-router.post('/auth/login-repartidor', [
-  body('email').isEmail().normalizeEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
-], authController.loginRepartidor);
-router.post('/auth/login-usuario', [
-  body('email').isEmail().normalizeEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
-], authController.loginUsuario);
-router.post('/auth/refresh', [
-  body('refreshToken').notEmpty().withMessage('refreshToken es requerido'),
-], authController.refresh);
-router.post('/auth/registro', [
-  body('nombre').trim().notEmpty().withMessage('Nombre es requerido'),
-  body('apellido').trim().notEmpty().withMessage('Apellido es requerido'),
-  body('email').isEmail().normalizeEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
-  body('telefono').optional().isMobilePhone().withMessage('Teléfono inválido'),
-], authController.registroUsuario);
+// Rutas de Auth migradas a routes/auth.routes.js
 
 // Protected routes
 router.use(verifyToken);
 
-// Usuarios routes
-router.get('/usuarios', roleGuard('admin_superior', 'encargado_sucursal'), usuarios.listarUsuarios);
-router.get('/usuarios/roles', roleGuard('admin_superior'), usuarios.listarRoles);
-router.post('/usuarios', [
-  body('nombre').trim().notEmpty().withMessage('Nombre es requerido'),
-  body('apellido').trim().notEmpty().withMessage('Apellido es requerido'),
-  body('email').isEmail().normalizeEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres'),
-  body('telefono').optional().isMobilePhone().withMessage('Teléfono inválido'),
-  body('dni').optional().isLength({ min: 8, max: 15 }).withMessage('DNI debe tener entre 8 y 15 caracteres'),
-  body('rol_id').isInt({ gt: 0 }).withMessage('ID de rol inválido'),
-  body('sucursal_id').optional().isInt({ gt: 0 }).withMessage('ID de sucursal inválido'),
-], roleGuard('admin_superior'), (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ ok: false, mensaje: 'Errores de validación', errores: errors.array() });
-  }
-  next();
-}, usuarios.crearUsuario);
-router.put('/usuarios/:id', [
-  body('nombre').optional().trim().notEmpty().withMessage('Nombre no puede estar vacío'),
-  body('apellido').optional().trim().notEmpty().withMessage('Apellido no puede estar vacío'),
-  body('telefono').optional().isMobilePhone().withMessage('Teléfono inválido'),
-  body('dni').optional().isLength({ min: 8, max: 15 }).withMessage('DNI debe tener entre 8 y 15 caracteres'),
-  body('activo').optional().isBoolean().withMessage('Activo debe ser booleano'),
-  body('sucursal_id').optional().isInt({ gt: 0 }).withMessage('ID de sucursal inválido'),
-  body('foto_url').optional().isURL().withMessage('URL de foto inválida'),
-], roleGuard('admin_superior', 'encargado_sucursal'), (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ ok: false, mensaje: 'Errores de validación', errores: errors.array() });
-  }
-  next();
-}, usuarios.actualizarUsuario);
-router.delete('/usuarios/:id', roleGuard('admin_superior'), usuarios.eliminarUsuario);
-router.put('/usuarios/cambiar-password', [
-  body('password_actual').isLength({ min: 6 }).withMessage('La contraseña actual debe tener al menos 6 caracteres'),
-  body('password_nueva').isLength({ min: 6 }).withMessage('La nueva contraseña debe tener al menos 6 caracteres'),
-], roleGuard('admin_superior', 'encargado_sucursal', 'empleado', 'usuario'), (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ ok: false, mensaje: 'Errores de validación', errores: errors.array() });
-  }
-  next();
-}, usuarios.cambiarPassword);
+// Rutas de Usuarios migradas a routes/usuarios.routes.js
 
-// Sucursales routes
-router.post('/sucursales', [
-  body('nombre').trim().notEmpty().withMessage('Nombre es requerido'),
-  body('direccion').trim().notEmpty().withMessage('Dirección es requerida'),
-  body('telefono').optional().isMobilePhone().withMessage('Teléfono inválido'),
-  body('distrito').optional().isString().withMessage('Distrito debe ser texto'),
-], roleGuard('admin_superior'), (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ ok: false, mensaje: 'Errores de validación', errores: errors.array() });
-  }
-  next();
-}, sucursales.crearSucursal);
-router.put('/sucursales/:id', [
-  body('nombre').optional().trim().notEmpty().withMessage('Nombre no puede estar vacío'),
-  body('direccion').optional().trim().notEmpty().withMessage('Dirección no puede estar vacía'),
-  body('telefono').optional().isMobilePhone().withMessage('Teléfono inválido'),
-  body('distrito').optional().isString().withMessage('Distrito debe ser texto'),
-  body('activo').optional().isBoolean().withMessage('Activo debe ser booleano'),
-], roleGuard('admin_superior', 'encargado_sucursal'), (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ ok: false, mensaje: 'Errores de validación', errores: errors.array() });
-  }
-  next();
-}, sucursales.actualizarSucursal);
+// Rutas de Sucursales migradas a routes/sucursales.routes.js
 
 // Pagos routes
 router.post('/pagos', [

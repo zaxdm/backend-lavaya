@@ -5,6 +5,8 @@ const cors = require('cors');
 
 const routes = require('./routes');
 
+const errorMiddleware = require('./middlewares/error.middleware');
+
 const app = express();
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
@@ -20,13 +22,7 @@ app.get('/health', (_, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
-  console.error('Error no controlado:', err);
-
-  res.status(500).json({
-    ok: false,
-    mensaje: 'Error interno del servidor'
-  });
-});
+// Middleware Global de Manejo de Errores
+app.use(errorMiddleware);
 
 module.exports = app;
