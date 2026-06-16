@@ -1,0 +1,409 @@
+// This is your Prisma schema file for LavaYa
+// Datasource: MySQL en Clever Cloud
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum Rol {
+  CLIENTE
+  REPARTIDOR
+  ADMIN
+  EMPLEADO
+}
+
+enum EstadoPedido {
+  PENDIENTE         // Pedido creado, esperando confirmación
+  CONFIRMADO        // Aceptado por repartidor
+  RECOLECTADO       // Repartidor recogió las prendas
+  EN_PROCESO        // En lavandería
+  LISTO             // Listo para entrega
+  EN_CAMINO         // Repartidor en ruta de entrega
+  ENTREGADO         // Entregado al cliente
+  CANCELADO         // Cancelado
+}
+
+enum EstadoPago {
+  PENDIENTE
+  COMPLETADO
+  FALLIDO
+  REEMBOLSADO
+}
+
+enum MetodoPago {
+  PAYPAL
+  EFECTIVO
+}
+
+enum EstadoRepartidor {
+  DISPONIBLE
+  OCUPADO
+  INACTIVO
+}
+
+enum TipoMembresia {
+  BASICO
+  PREMIUM
+  EMPRESARIAL
+}
+
+enum EstadoMembresia {
+  ACTIVA
+  EXPIRADA
+  CANCELADA
+}
+
+// ─────────────────────────────────────────────────────────────
+// USUARIO (tabla central para los 4 roles)
+// ─────────────────────────────────────────────────────────────
+
+model Usuario {
+  id                String     @id @default(uuid())
+  nombre            String
+  apellido          String
+  email             String     @unique
+  telefono          String?
+  passwordHash      String
+  rol               Rol        @default(CLIENTE)
+  activo            Boolean    @default(true)
+  emailVerificado   Boolean    @default(false)
+  tokenVerificacion String?
+  tokenReset        String?
+  tokenResetExpira  DateTime?
+  fotoPerfil        String?
+  empresaB2BId      String?    // FK hacia la empresa donde trabaja (empleados B2B)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // Relaciones
+  direcciones        Direccion[]
+  pedidosComoCliente Pedido[]        @relation("PedidoCliente")
+  puntos             Puntos?
+  membresias         Membresia[]
+  empresaB2B         EmpresaB2B?     @relation("EmpresaEmpleados", fields: [empresaB2BId], references: [id])
+  empresaB2BPropia   EmpresaB2B?     @relation("EmpresaDueno")
+  repartidor         Repartidor?
+  refreshTokens      RefreshToken[]
+
+  @@map("usuarios")
+}
+
+// ─────────────────────────────────────────────────────────────
+// REFRESH TOKENS
+// ─────────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique @db.VarChar(500)
+  usuarioId String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+// DIRECCIÓN
+// ─────────────────────────────────────────────────────────────
+
+model Direccion {
+  id          String   @id @default(uuid())
+  usuarioId   String
+  calle       String
+  numero      String
+  colonia     String
+  ciudad      String
+  estado      String
+  codigoPostal String
+  referencia  String?
+  esPrincipal Boolean  @default(false)
+  latitud     Float?
+  longitud    Float?
+  createdAt   DateTime @default(now())
+
+  usuario     Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  pedidos     Pedido[]
+
+  @@map("direcciones")
+}
+
+// ─────────────────────────────────────────────────────────────
+// REPARTIDOR
+// ─────────────────────────────────────────────────────────────
+
+model Repartidor {
+  id                 String           @id @default(uuid())
+  usuarioId          String           @unique
+  vehiculo           String?
+  placas             String?
+  licencia           String?
+  estado             EstadoRepartidor @default(DISPONIBLE)
+  latitudActual      Float?
+  longitudActual     Float?
+  calificacionPromedio Float          @default(0)
+  totalServicios     Int              @default(0)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  usuario            Usuario          @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  pedidosRecoleccion Pedido[]         @relation("PedidoRepartidorRecoleccion")
+  pedidosEntrega     Pedido[]         @relation("PedidoRepartidorEntrega")
+  calificaciones     Calificacion[]
+
+  @@map("repartidores")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PEDIDO
+// ─────────────────────────────────────────────────────────────
+
+model Pedido {
+  id                    String       @id @default(uuid())
+  clienteId             String
+  direccionId           String
+  repartidorRecoleccionId String?
+  repartidorEntregaId   String?
+  estado                EstadoPedido @default(PENDIENTE)
+  
+  // Prendas - por CANTIDAD (no por peso)
+  totalPrendas          Int          // Total de prendas
+  tienePrendasExtra     Boolean      @default(false) // >10 prendas = cargo extra
+  
+  // Fechas
+  fechaRecoleccion      DateTime?    // Fecha acordada de recolección
+  fechaEntregaEstimada  DateTime?
+  fechaEntregaReal      DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  // Notas
+  notasCliente          String?      @db.Text
+  notasInternas         String?      @db.Text
+
+  // Relaciones
+  cliente               Usuario      @relation("PedidoCliente", fields: [clienteId], references: [id])
+  direccion             Direccion    @relation(fields: [direccionId], references: [id])
+  repartidorRecoleccion Repartidor?  @relation("PedidoRepartidorRecoleccion", fields: [repartidorRecoleccionId], references: [id])
+  repartidorEntrega     Repartidor?  @relation("PedidoRepartidorEntrega", fields: [repartidorEntregaId], references: [id])
+  prendas               Prenda[]
+  pago                  Pago?
+  calificacion          Calificacion?
+  historial             HistorialPedido[]
+
+  @@map("pedidos")
+}
+
+// ─────────────────────────────────────────────────────────────
+// HISTORIAL DE PEDIDO (trazabilidad de estados)
+// ─────────────────────────────────────────────────────────────
+
+model HistorialPedido {
+  id        String       @id @default(uuid())
+  pedidoId  String
+  estado    EstadoPedido
+  nota      String?
+  creadoPor String?      // userId de quien hizo el cambio
+  createdAt DateTime     @default(now())
+
+  pedido    Pedido       @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  @@map("historial_pedidos")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRENDA
+// ─────────────────────────────────────────────────────────────
+
+model Prenda {
+  id          String   @id @default(uuid())
+  pedidoId    String
+  tipo        String   // "camisa", "pantalon", "vestido", etc.
+  cantidad    Int      @default(1)
+  descripcion String?
+  precio      Float    // Precio unitario por prenda
+  createdAt   DateTime @default(now())
+
+  pedido      Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  @@map("prendas")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRECIO POR TIPO DE PRENDA (catálogo de precios)
+// ─────────────────────────────────────────────────────────────
+
+model CatalogoPrenda {
+  id                String  @id @default(uuid())
+  nombre            String  @unique // "camisa", "pantalon", etc.
+  descripcion       String?
+  precioUnitario    Float   // Precio base por unidad
+  precioExtra       Float   @default(0) // Cargo adicional si >10 prendas
+  activo            Boolean @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("catalogo_prendas")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PAGO
+// ─────────────────────────────────────────────────────────────
+
+model Pago {
+  id              String      @id @default(uuid())
+  pedidoId        String      @unique
+  monto           Float
+  metodoPago      MetodoPago
+  estado          EstadoPago  @default(PENDIENTE)
+  
+  // PayPal
+  paypalOrderId   String?     // ID de orden en PayPal
+  paypalCaptureId String?     // ID de captura en PayPal
+  
+  // Efectivo
+  recolectadoPor  String?     // userId del repartidor que cobró
+  
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  pedido          Pedido      @relation(fields: [pedidoId], references: [id])
+
+  @@map("pagos")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PUNTOS DE LEALTAD
+// ─────────────────────────────────────────────────────────────
+
+model Puntos {
+  id           String          @id @default(uuid())
+  usuarioId    String          @unique
+  saldo        Int             @default(0)
+  totalGanados Int             @default(0)
+  totalCanjeados Int           @default(0)
+  updatedAt    DateTime        @updatedAt
+
+  usuario      Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  movimientos  MovimientoPuntos[]
+
+  @@map("puntos")
+}
+
+model MovimientoPuntos {
+  id          String   @id @default(uuid())
+  puntosId    String
+  cantidad    Int      // positivo = ganados, negativo = canjeados
+  concepto    String   // "Pedido #xxx completado", "Canje descuento", etc.
+  pedidoId    String?
+  createdAt   DateTime @default(now())
+
+  puntos      Puntos   @relation(fields: [puntosId], references: [id], onDelete: Cascade)
+
+  @@map("movimientos_puntos")
+}
+
+// ─────────────────────────────────────────────────────────────
+// MEMBRESÍA
+// ─────────────────────────────────────────────────────────────
+
+model Membresia {
+  id           String          @id @default(uuid())
+  usuarioId    String
+  tipo         TipoMembresia   @default(BASICO)
+  estado       EstadoMembresia @default(ACTIVA)
+  fechaInicio  DateTime        @default(now())
+  fechaFin     DateTime
+  precio       Float
+  descuento    Float           @default(0) // % descuento en pedidos
+  pedidosGratis Int            @default(0) // Pedidos gratuitos incluidos
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  usuario      Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  pagoMembresia PagoMembresia?
+
+  @@map("membresias")
+}
+
+model PagoMembresia {
+  id            String     @id @default(uuid())
+  membresiaId   String     @unique
+  monto         Float
+  metodoPago    MetodoPago
+  estado        EstadoPago @default(PENDIENTE)
+  paypalOrderId String?
+  createdAt     DateTime   @default(now())
+
+  membresia     Membresia  @relation(fields: [membresiaId], references: [id])
+
+  @@map("pagos_membresia")
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPRESA B2B
+// ─────────────────────────────────────────────────────────────
+
+model EmpresaB2B {
+  id             String    @id @default(uuid())
+  nombre         String
+  rfc            String?   @unique
+  email          String    @unique
+  telefono       String?
+  direccion      String?
+  duenoId        String    @unique // Usuario con rol ADMIN/CLIENTE que la registró
+  activa         Boolean   @default(true)
+  descuentoFijo  Float     @default(0) // % de descuento corporativo
+  limiteCredito  Float     @default(0) // Crédito mensual
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  dueno          Usuario   @relation("EmpresaDueno", fields: [duenoId], references: [id])
+  empleados      Usuario[] @relation("EmpresaEmpleados")
+  contrato       ContratoB2B?
+
+  @@map("empresas_b2b")
+}
+
+model ContratoB2B {
+  id              String     @id @default(uuid())
+  empresaId       String     @unique
+  fechaInicio     DateTime
+  fechaFin        DateTime
+  condiciones     String?    @db.Text
+  pedidosMensuales Int       @default(0) // Pedidos incluidos en contrato
+  activo          Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+
+  empresa         EmpresaB2B @relation(fields: [empresaId], references: [id])
+
+  @@map("contratos_b2b")
+}
+
+// ─────────────────────────────────────────────────────────────
+// CALIFICACIONES
+// ─────────────────────────────────────────────────────────────
+
+model Calificacion {
+  id            String     @id @default(uuid())
+  pedidoId      String     @unique
+  repartidorId  String
+  estrellas     Int        // 1-5
+  comentario    String?    @db.Text
+  createdAt     DateTime   @default(now())
+
+  pedido        Pedido     @relation(fields: [pedidoId], references: [id])
+  repartidor    Repartidor @relation(fields: [repartidorId], references: [id])
+
+  @@map("calificaciones")
+}

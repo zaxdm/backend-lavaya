@@ -1,0 +1,580 @@
+// src/routes/empleado.routes.js
+const { Router } = require('express');
+const { authenticate, authorize } = require('../middlewares/auth.middleware');
+const validate = require('../middlewares/validate.middleware');
+const { cambiarEstadoRules } = require('../middlewares/validators/pedido.validators');
+const prisma = require('../config/prisma');
+const { v4: uuidv4 } = require('uuid');
+
+const router = Router();
+router.use(authenticate);
+router.use(authorize('EMPLEADO', 'ADMIN'));
+
+// ─── Ver pedidos en lavandería ────────────────────────────────
+router.get('/pedidos/en-proceso', async (req, res, next) => {
+  try {
+    const { estado } = req.query;
+    const estados = estado
+      ? [estado]
+      : ['RECOLECTADO', 'EN_PROCESO', 'LISTO'];
+
+    const pedidos = await prisma.pedido.findMany({
+      where: { estado: { in: estados } },
+      include: {
+        cliente: { select: { nombre: true, apellido: true, telefono: true } },
+        prendas: true,
+        direccion: true,
+        pago: { select: { metodoPago: true, monto: true, estado: true } },
+        repartidorRecoleccion: {
+          include: { usuario: { select: { nombre: true, apellido: true } } },
+        },
+        historial: { orderBy: { createdAt: 'asc' } },
+      },
+      orderBy: [{ fechaRecoleccion: 'asc' }, { createdAt: 'asc' }],
+    });
+    res.json(pedidos);
+  } catch (err) { next(err); }
+});
+
+// ─── Pedidos que pueden recibir repartidor ─────────────────────
+router.get('/pedidos/asignables', async (req, res, next) => {
+  try {
+    const pedidos = await prisma.pedido.findMany({
+      where: {
+        OR: [
+          { estado: { in: ['PENDIENTE', 'CONFIRMADO'] }, repartidorRecoleccionId: null },
+          { estado: 'LISTO', repartidorEntregaId: null },
+        ],
+      },
+      include: {
+        cliente: { select: { id: true, nombre: true, apellido: true, email: true, telefono: true } },
+        direccion: true,
+        pago: { select: { metodoPago: true, monto: true, estado: true } },
+        repartidorRecoleccion: {
+          include: { usuario: { select: { nombre: true, apellido: true, telefono: true } } },
+        },
+        repartidorEntrega: {
+          include: { usuario: { select: { nombre: true, apellido: true, telefono: true } } },
+        },
+      },
+      orderBy: [{ estado: 'asc' }, { createdAt: 'asc' }],
+    });
+    res.json(pedidos);
+  } catch (err) { next(err); }
+});
+
+// ─── Marcar pedido como EN_PROCESO (ingresó a lavandería) ────
+router.patch('/pedidos/:id/en-proceso', async (req, res, next) => {
+  try {
+    const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.estado !== 'RECOLECTADO') {
+      return res.status(400).json({ error: 'El pedido debe estar en estado RECOLECTADO' });
+    }
+
+    const actualizado = await prisma.pedido.update({
+      where: { id: req.params.id },
+      data: {
+        estado: 'EN_PROCESO',
+        historial: {
+          create: {
+            id: uuidv4(),
+            estado: 'EN_PROCESO',
+            nota: 'Ingresado a lavandería',
+            creadoPor: req.user.id,
+          },
+        },
+      },
+    });
+    res.json({ mensaje: 'Pedido en proceso de lavado', pedido: actualizado });
+  } catch (err) { next(err); }
+});
+
+// ─── Marcar pedido como LISTO ─────────────────────────────────
+router.patch('/pedidos/:id/listo', async (req, res, next) => {
+  try {
+    const { nota } = req.body;
+    const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.estado !== 'EN_PROCESO') {
+      return res.status(400).json({ error: 'El pedido debe estar en estado EN_PROCESO' });
+    }
+
+    // Calcular fecha estimada de entrega (hoy + 1 día hábil)
+    const mañana = new Date();
+    mañana.setDate(mañana.getDate() + 1);
+
+    const actualizado = await prisma.pedido.update({
+      where: { id: req.params.id },
+      data: {
+        estado: 'LISTO',
+        fechaEntregaEstimada: mañana,
+        historial: {
+          create: {
+            id: uuidv4(),
+            estado: 'LISTO',
+            nota: nota || 'Prendas listas para entrega',
+            creadoPor: req.user.id,
+          },
+        },
+      },
+      include: {
+        prendas: true,
+        cliente: { select: { nombre: true, telefono: true } },
+        pago: { select: { metodoPago: true, monto: true } },
+      },
+    });
+    res.json({ mensaje: 'Pedido listo para entrega', pedido: actualizado });
+  } catch (err) { next(err); }
+});
+
+// ─── Confirmar pago en efectivo (cobrando en lavandería) ─────
+router.patch('/pedidos/:id/confirmar-pago', async (req, res, next) => {
+  try {
+    const pago = await prisma.pago.findUnique({ where: { pedidoId: req.params.id } });
+    if (!pago) return res.status(404).json({ error: 'No hay pago registrado para este pedido' });
+    if (pago.estado === 'COMPLETADO') {
+      return res.status(400).json({ error: 'El pago ya fue confirmado' });
+    }
+
+    const pagoActualizado = await prisma.pago.update({
+      where: { pedidoId: req.params.id },
+      data: { estado: 'COMPLETADO', recolectadoPor: req.user.id },
+    });
+    res.json({ mensaje: 'Pago confirmado', pago: pagoActualizado });
+  } catch (err) { next(err); }
+});
+
+// ─── Resumen de carga diaria ──────────────────────────────────
+router.get('/resumen', async (req, res, next) => {
+  try {
+    const hoy = new Date();
+    const inicioDia = new Date(hoy.setHours(0, 0, 0, 0));
+
+    const [recolectados, enProceso, listos, entregadosHoy] = await Promise.all([
+      prisma.pedido.count({ where: { estado: 'RECOLECTADO' } }),
+      prisma.pedido.count({ where: { estado: 'EN_PROCESO' } }),
+      prisma.pedido.count({ where: { estado: 'LISTO' } }),
+      prisma.pedido.count({
+        where: { estado: 'ENTREGADO', fechaEntregaReal: { gte: inicioDia } },
+      }),
+    ]);
+
+    res.json({ recolectados, enProceso, listos, entregadosHoy });
+  } catch (err) { next(err); }
+});
+
+// ─── Catálogo (lectura + edición para empleado) ───────────────
+router.get('/catalogo', async (req, res, next) => {
+  try {
+    const { todos } = req.query;
+    const catalogo = await prisma.catalogoPrenda.findMany({
+      where: todos === 'true' ? undefined : { activo: true },
+      orderBy: { nombre: 'asc' },
+    });
+    res.json(catalogo);
+  } catch (err) { next(err); }
+});
+
+router.post('/catalogo', async (req, res, next) => {
+  try {
+    const { nombre, descripcion, precioUnitario, precioExtra } = req.body;
+    if (!nombre || !nombre.trim()) {
+      return res.status(400).json({ error: 'El nombre es obligatorio' });
+    }
+    if (!precioUnitario || isNaN(precioUnitario) || Number(precioUnitario) <= 0) {
+      return res.status(400).json({ error: 'El precio unitario debe ser mayor a 0' });
+    }
+    const existe = await prisma.catalogoPrenda.findUnique({
+      where: { nombre: nombre.toLowerCase().trim() },
+    });
+    if (existe) return res.status(409).json({ error: 'Ya existe una prenda con ese nombre' });
+
+    const item = await prisma.catalogoPrenda.create({
+      data: {
+        id: uuidv4(),
+        nombre: nombre.toLowerCase().trim(),
+        descripcion: descripcion?.trim() || null,
+        precioUnitario: parseFloat(precioUnitario),
+        precioExtra: parseFloat(precioExtra) || 0,
+      },
+    });
+    res.status(201).json(item);
+  } catch (err) { next(err); }
+});
+
+router.patch('/catalogo/:id', async (req, res, next) => {
+  try {
+    const { nombre, descripcion, precioUnitario, precioExtra, activo } = req.body;
+    const item = await prisma.catalogoPrenda.update({
+      where: { id: req.params.id },
+      data: {
+        ...(nombre !== undefined && { nombre: nombre.toLowerCase().trim() }),
+        ...(descripcion !== undefined && { descripcion }),
+        ...(precioUnitario !== undefined && { precioUnitario: parseFloat(precioUnitario) }),
+        ...(precioExtra !== undefined && { precioExtra: parseFloat(precioExtra) }),
+        ...(activo !== undefined && { activo }),
+      },
+    });
+    res.json(item);
+  } catch (err) { next(err); }
+});
+
+// ─── Repartidores disponibles ─────────────────────────────────
+router.get('/repartidores', async (req, res, next) => {
+  try {
+    const { estado = 'DISPONIBLE' } = req.query;
+    const repartidores = await prisma.repartidor.findMany({
+      where: { estado },
+      include: {
+        usuario: {
+          select: { id: true, nombre: true, apellido: true, telefono: true, activo: true },
+        },
+      },
+      orderBy: { calificacionPromedio: 'desc' },
+    });
+    res.json(repartidores);
+  } catch (err) { next(err); }
+});
+
+// ─── Asignar repartidor de entrega (pedidos LISTO) ────────────
+router.patch('/pedidos/:id/asignar-entrega', async (req, res, next) => {
+  try {
+    const { repartidorId } = req.body;
+    if (!repartidorId) {
+      return res.status(400).json({ error: 'El repartidorId es obligatorio' });
+    }
+
+    const [pedido, repartidor] = await Promise.all([
+      prisma.pedido.findUnique({ where: { id: req.params.id } }),
+      prisma.repartidor.findUnique({ where: { id: repartidorId } }),
+    ]);
+
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!repartidor) return res.status(404).json({ error: 'Repartidor no encontrado' });
+    if (pedido.estado !== 'LISTO') {
+      return res.status(400).json({ error: 'El pedido debe estar en estado LISTO para asignar entrega' });
+    }
+    if (repartidor.estado === 'INACTIVO') {
+      return res.status(400).json({ error: 'El repartidor está inactivo' });
+    }
+
+    const pedidoActualizado = await prisma.pedido.update({
+      where: { id: req.params.id },
+      data: { repartidorEntregaId: repartidorId },
+    });
+
+    await prisma.historialPedido.create({
+      data: {
+        id: uuidv4(),
+        pedidoId: req.params.id,
+        estado: 'LISTO',
+        nota: `Repartidor de entrega asignado por empleado`,
+        creadoPor: req.user.id,
+      },
+    });
+
+    await prisma.repartidor.update({
+      where: { id: repartidorId },
+      data: { estado: 'OCUPADO' },
+    });
+
+    res.json({ mensaje: 'Repartidor de entrega asignado', pedido: pedidoActualizado });
+  } catch (err) { next(err); }
+});
+
+// ─── Asignar repartidor como empleado (recolección o entrega) ───
+router.patch('/pedidos/:id/asignar-repartidor', async (req, res, next) => {
+  try {
+    const { repartidorId, tipo = 'recoleccion' } = req.body;
+    if (!repartidorId) {
+      return res.status(400).json({ error: 'El repartidorId es obligatorio' });
+    }
+    if (!['recoleccion', 'entrega'].includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo de asignación inválido' });
+    }
+
+    const [pedido, repartidor] = await Promise.all([
+      prisma.pedido.findUnique({ where: { id: req.params.id } }),
+      prisma.repartidor.findUnique({ where: { id: repartidorId } }),
+    ]);
+
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!repartidor) return res.status(404).json({ error: 'Repartidor no encontrado' });
+    if (repartidor.estado === 'INACTIVO') {
+      return res.status(400).json({ error: 'El repartidor está inactivo' });
+    }
+
+    if (tipo === 'recoleccion') {
+      if (!['PENDIENTE', 'CONFIRMADO'].includes(pedido.estado)) {
+        return res.status(400).json({ error: 'Solo puedes asignar recolección a pedidos pendientes o confirmados' });
+      }
+      if (pedido.repartidorRecoleccionId) {
+        return res.status(400).json({ error: 'El pedido ya tiene repartidor de recolección' });
+      }
+    }
+
+    if (tipo === 'entrega') {
+      if (pedido.estado !== 'LISTO') {
+        return res.status(400).json({ error: 'El pedido debe estar LISTO para asignar entrega' });
+      }
+      if (pedido.repartidorEntregaId) {
+        return res.status(400).json({ error: 'El pedido ya tiene repartidor de entrega' });
+      }
+    }
+
+    const campo = tipo === 'entrega' ? 'repartidorEntregaId' : 'repartidorRecoleccionId';
+    const nuevoEstado = tipo === 'entrega' ? pedido.estado : 'CONFIRMADO';
+
+    const pedidoActualizado = await prisma.$transaction(async (tx) => {
+      const actualizado = await tx.pedido.update({
+        where: { id: req.params.id },
+        data: {
+          [campo]: repartidorId,
+          estado: nuevoEstado,
+          historial: {
+            create: {
+              id: uuidv4(),
+              estado: nuevoEstado,
+              nota: `Repartidor asignado para ${tipo} por empleado`,
+              creadoPor: req.user.id,
+            },
+          },
+        },
+        include: {
+          prendas: true,
+          pago: true,
+          cliente: { select: { id: true, nombre: true, apellido: true, email: true, telefono: true } },
+          direccion: true,
+          repartidorRecoleccion: { include: { usuario: { select: { nombre: true, apellido: true, telefono: true } } } },
+          repartidorEntrega: { include: { usuario: { select: { nombre: true, apellido: true, telefono: true } } } },
+        },
+      });
+
+      await tx.repartidor.update({
+        where: { id: repartidorId },
+        data: { estado: 'OCUPADO' },
+      });
+
+      return actualizado;
+    });
+
+    res.json({ mensaje: `Repartidor asignado para ${tipo}`, pedido: pedidoActualizado });
+  } catch (err) { next(err); }
+});
+
+// ─── Ventas diarias (últimos N días) ──────────────────────────
+router.get('/ventas-diarias', async (req, res, next) => {
+  try {
+    const { dias = 14 } = req.query;
+    const desde = new Date();
+    desde.setDate(desde.getDate() - parseInt(dias));
+    desde.setHours(0, 0, 0, 0);
+
+    const resultado = await prisma.$queryRaw`
+      SELECT
+        DATE(p.createdAt) AS fecha,
+        COUNT(*)          AS totalPedidos,
+        SUM(CASE WHEN p.estado = 'ENTREGADO' THEN 1 ELSE 0 END) AS entregados,
+        COALESCE(SUM(CASE WHEN pg.estado = 'COMPLETADO' THEN pg.monto ELSE 0 END), 0) AS ingresos
+      FROM pedidos p
+      LEFT JOIN pagos pg ON pg.pedidoId = p.id
+      WHERE p.createdAt >= ${desde}
+      GROUP BY DATE(p.createdAt)
+      ORDER BY fecha ASC
+    `;
+
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
+// ─── Crear pedido presencial ──────────────────────────────────
+// POST /api/empleados/pedidos
+// El empleado crea un pedido en nombre de un cliente que llegó a la tienda.
+// No requiere direccionId (es presencial), pero puede incluir datos opcionales.
+router.post('/pedidos', async (req, res, next) => {
+  try {
+    const {
+      clienteNombre,    // nombre del cliente presencial (requerido)
+      clienteApellido,  // apellido
+      clienteTelefono,  // teléfono para contacto
+      prendas,          // [{ tipo, cantidad }]
+      metodoPago,       // 'EFECTIVO' | 'PAYPAL'
+      notasInternas,    // notas del empleado
+      clienteId,        // si el cliente ya está registrado en el sistema
+    } = req.body;
+
+    // Validaciones básicas
+    if (!prendas || !Array.isArray(prendas) || prendas.length === 0) {
+      return res.status(400).json({ error: 'Debes agregar al menos una prenda' });
+    }
+    if (!metodoPago || !['EFECTIVO', 'PAYPAL'].includes(metodoPago)) {
+      return res.status(400).json({ error: 'Método de pago inválido. Usa EFECTIVO o PAYPAL' });
+    }
+    if (!clienteId && !clienteNombre) {
+      return res.status(400).json({ error: 'Debes indicar el nombre del cliente o seleccionar un cliente registrado' });
+    }
+
+    // Cargar catálogo activo
+    const catalogo = await prisma.catalogoPrenda.findMany({ where: { activo: true } });
+    const catalogoMap = Object.fromEntries(catalogo.map(c => [c.nombre.toLowerCase(), c]));
+
+    // Calcular prendas
+    let totalPrendas = 0;
+    const prendasData = [];
+    for (const p of prendas) {
+      const tipo = (p.tipo || '').toLowerCase().trim();
+      const cantidad = parseInt(p.cantidad, 10);
+      if (!tipo) return res.status(400).json({ error: 'Cada prenda debe tener un tipo' });
+      if (!Number.isInteger(cantidad) || cantidad < 1) {
+        return res.status(400).json({ error: `Cantidad inválida para "${tipo}"` });
+      }
+      const item = catalogoMap[tipo];
+      if (!item) return res.status(400).json({ error: `Tipo de prenda no encontrado en catálogo: "${tipo}"` });
+      totalPrendas += cantidad;
+      prendasData.push({ tipo, cantidad, precio: item.precioUnitario });
+    }
+
+    const tienePrendasExtra = totalPrendas > 10;
+
+    // Si hay cargo extra, recalcular precios
+    if (tienePrendasExtra) {
+      for (const p of prendasData) {
+        const item = catalogoMap[p.tipo];
+        p.precio = item.precioUnitario + item.precioExtra;
+      }
+    }
+
+    const montoTotal = prendasData.reduce((acc, p) => acc + p.precio * p.cantidad, 0);
+
+    // Determinar el clienteId final
+    // Si no se pasa un clienteId, usar el ID del empleado como proxy
+    // (el pedido queda "sin cliente registrado" pero con notas del cliente)
+    let clienteFinalId = clienteId || null;
+
+    // Si se proporciona clienteId, verificar que existe
+    if (clienteFinalId) {
+      const clienteExiste = await prisma.usuario.findUnique({
+        where: { id: clienteFinalId },
+        select: { id: true, rol: true },
+      });
+      if (!clienteExiste) {
+        return res.status(404).json({ error: 'Cliente no encontrado en el sistema' });
+      }
+    }
+
+    // Construir notas internas con datos del cliente presencial
+    let notasInternasCompletas = notasInternas || '';
+    if (!clienteFinalId && clienteNombre) {
+      const datosCliente = [
+        `Cliente presencial: ${clienteNombre} ${clienteApellido || ''}`.trim(),
+        clienteTelefono ? `Tel: ${clienteTelefono}` : null,
+      ].filter(Boolean).join(' | ');
+      notasInternasCompletas = notasInternas
+        ? `${datosCliente}\n${notasInternas}`
+        : datosCliente;
+    }
+
+    // Si no hay cliente registrado, usar el ID del empleado como "cliente"
+    // (es un workaround: el campo clienteId es NOT NULL en el schema)
+    if (!clienteFinalId) {
+      clienteFinalId = req.user.id;
+    }
+
+    // Crear pedido + prendas + pago en secuencia (sin transaction para evitar timeout)
+    const pedido = await prisma.pedido.create({
+      data: {
+        id: uuidv4(),
+        clienteId: clienteFinalId,
+        estado: 'RECOLECTADO',   // presencial: ya está en la tienda → directo a RECOLECTADO
+        totalPrendas,
+        tienePrendasExtra,
+        notasCliente: `Pedido presencial — ${clienteNombre || 'Cliente'} ${clienteApellido || ''}`.trim(),
+        notasInternas: notasInternasCompletas || null,
+        // Sin dirección (es presencial)
+      },
+      include: {
+        prendas: true,
+        pago: true,
+      },
+    });
+
+    // Crear prendas
+    await prisma.prenda.createMany({
+      data: prendasData.map(p => ({
+        id: uuidv4(),
+        pedidoId: pedido.id,
+        tipo: p.tipo,
+        cantidad: p.cantidad,
+        precio: p.precio,
+      })),
+    });
+
+    // Crear pago
+    await prisma.pago.create({
+      data: {
+        id: uuidv4(),
+        pedidoId: pedido.id,
+        monto: montoTotal,
+        metodoPago,
+        estado: metodoPago === 'EFECTIVO' ? 'PENDIENTE' : 'PENDIENTE',
+        recolectadoPor: req.user.id,
+      },
+    });
+
+    // Crear historial
+    await prisma.historialPedido.create({
+      data: {
+        id: uuidv4(),
+        pedidoId: pedido.id,
+        estado: 'RECOLECTADO',
+        nota: `Pedido presencial creado por empleado. Cliente: ${clienteNombre || ''} ${clienteApellido || ''}`.trim(),
+        creadoPor: req.user.id,
+      },
+    });
+
+    // Obtener pedido completo para la respuesta
+    const pedidoCompleto = await prisma.pedido.findUnique({
+      where: { id: pedido.id },
+      include: {
+        prendas: true,
+        pago: true,
+        historial: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+
+    res.status(201).json({
+      mensaje: 'Pedido presencial creado correctamente',
+      pedido: pedidoCompleto,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── Buscar clientes registrados ──────────────────────────────
+// GET /api/empleados/clientes?q=texto
+router.get('/clientes', async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    if (!q || String(q).trim().length < 2) {
+      return res.json([]);
+    }
+    const buscar = String(q).trim();
+    const clientes = await prisma.usuario.findMany({
+      where: {
+        rol: 'CLIENTE',
+        activo: true,
+        OR: [
+          { nombre:   { contains: buscar } },
+          { apellido: { contains: buscar } },
+          { email:    { contains: buscar } },
+          { telefono: { contains: buscar } },
+        ],
+      },
+      select: { id: true, nombre: true, apellido: true, email: true, telefono: true },
+      take: 8,
+    });
+    res.json(clientes);
+  } catch (err) { next(err); }
+});
+
+module.exports = router;

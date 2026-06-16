@@ -1,0 +1,19 @@
+# Variables de entorno - NO subir al repositorio
+.env
+.env.local
+.env.production
+
+# Dependencias
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Prisma
+prisma/migrations/
+
+# OS
+.DS_Store
+Thumbs.db
