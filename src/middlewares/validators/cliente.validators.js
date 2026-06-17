@@ -12,11 +12,9 @@ const agregarDireccionRules = [
   body('numero').trim().notEmpty().withMessage('El número es obligatorio'),
   body('colonia').trim().notEmpty().withMessage('La colonia es obligatoria'),
   body('ciudad').trim().notEmpty().withMessage('La ciudad es obligatoria'),
-  body('estado').optional().trim(),
+  body('estado').trim().notEmpty().withMessage('El estado es obligatorio'),
   body('codigoPostal')
-    .optional()
-    .trim()
-    .if(body('codigoPostal').exists().notEmpty())
+    .trim().notEmpty().withMessage('El código postal es obligatorio')
     .matches(/^\d{4,6}$/).withMessage('Código postal inválido'),
   body('latitud').optional().isFloat({ min: -90, max: 90 }).withMessage('Latitud inválida'),
   body('longitud').optional().isFloat({ min: -180, max: 180 }).withMessage('Longitud inválida'),
