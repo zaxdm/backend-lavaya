@@ -124,8 +124,8 @@ model Direccion {
   numero      String
   colonia     String
   ciudad      String
-  estado      String
-  codigoPostal String
+  estado      String?
+  codigoPostal String?
   referencia  String?
   esPrincipal Boolean  @default(false)
   latitud     Float?
