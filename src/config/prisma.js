@@ -3,18 +3,21 @@
 // Reservamos 1 para consultas manuales → pool de 2 para evitar hitting the limit.
 const { PrismaClient } = require('@prisma/client');
 
-let dbUrl = process.env.DATABASE_URL;
+let dbUrl = process.env.DATABASE_URL || '';
 // Ensure connection_limit is set to 2
-if (dbUrl && !dbUrl.includes('connection_limit')) {
-  const separator = dbUrl.includes('?') ? '&' : '?';
-  dbUrl = `${dbUrl}${separator}connection_limit=2`;
-} else if (dbUrl) {
-  // Replace existing connection_limit with 2
-  dbUrl = dbUrl.replace(/connection_limit=\d+/, 'connection_limit=2');
+if (dbUrl) {
+  // If there's already a connection_limit, replace it
+  if (dbUrl.includes('connection_limit')) {
+    dbUrl = dbUrl.replace(/connection_limit=\d+/, 'connection_limit=2');
+  } else {
+    // If there's a query string, add &connection_limit=2; else add ?connection_limit=2
+    const separator = dbUrl.includes('?') ? '&' : '?';
+    dbUrl = `${dbUrl}${separator}connection_limit=2`;
+  }
 }
 
 const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
+  log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error'],
   datasources: {
     db: {
       url: dbUrl,
