@@ -29,13 +29,25 @@ if (dbUrl && !dbUrl.includes('pool_timeout')) {
 
 console.log('[Prisma Config] Modified DATABASE_URL (partial):', dbUrl ? dbUrl.split('@')[0] + '@...' : 'NOT FOUND');
 
-const prisma = new PrismaClient({
+let prismaConfig = {
   log: process.env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['warn', 'error'],
-  datasources: {
-    db: {
-      url: dbUrl,
-    },
-  },
-});
+};
+
+if (dbUrl) {
+  prismaConfig.datasources = { db: { url: dbUrl } };
+} else {
+  console.warn('[Prisma Config] No DATABASE_URL provided; using default datasource configuration');
+}
+
+// Reuse client in serverless environments to avoid exhausting connections
+let prisma;
+if (global.prisma) {
+  prisma = global.prisma;
+} else {
+  prisma = new (require('@prisma/client').PrismaClient)(prismaConfig);
+  if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'production') {
+    global.prisma = prisma;
+  }
+}
 
 module.exports = prisma;
