@@ -615,6 +615,24 @@ router.get('/clientes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Historial de pedidos de un cliente ───────────────────────
+router.get('/clientes/:clienteId/pedidos', async (req, res, next) => {
+  try {
+    const { clienteId } = req.params;
+    const pedidos = await prisma.pedido.findMany({
+      where: { clienteId },
+      include: {
+        direccion: true,
+        pago: { select: { monto: true, metodoPago: true, estado: true } },
+        historial: { orderBy: { createdAt: 'asc' } },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+      take: 20,
+    });
+    res.json(pedidos);
+  } catch (err) { next(err); }
+});
+
 // ─── Obtener direcciones de un cliente ────────────────────────
 router.get('/clientes/:clienteId/direcciones', async (req, res, next) => {
   try {
