@@ -65,21 +65,27 @@ const register = async (req, res, next) => {
 // ─── Login ───────────────────────────────────────────────────
 const login = async (req, res, next) => {
   try {
+    console.log('Login request received for email:', req.body.email);
     const { email, password } = req.body;
 
+    console.log('Finding user...');
     const usuario = await prisma.usuario.findUnique({ where: { email } });
+    console.log('User found:', usuario ? usuario.id : 'NOT FOUND');
     if (!usuario || !usuario.activo) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
+    console.log('Comparing password...');
     const valida = await bcrypt.compare(password, usuario.passwordHash);
     if (!valida) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
+    console.log('Generating tokens...');
     const accessToken = generateAccessToken({ id: usuario.id, email: usuario.email, rol: usuario.rol });
     const refreshToken = generateRefreshToken({ id: usuario.id });
 
+    console.log('Saving refresh token...');
     await prisma.refreshToken.create({
       data: {
         id: uuidv4(),
@@ -89,6 +95,7 @@ const login = async (req, res, next) => {
       },
     });
 
+    console.log('Login successful!');
     res.json({
       usuario: {
         id: usuario.id,
@@ -101,6 +108,8 @@ const login = async (req, res, next) => {
       refreshToken,
     });
   } catch (err) {
+    console.error('Error in login endpoint:', err);
+    console.error('Stack trace:', err.stack);
     next(err);
   }
 };
