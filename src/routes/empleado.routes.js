@@ -100,7 +100,6 @@ router.patch('/pedidos/:id/listo', async (req, res, next) => {
       return res.status(400).json({ error: 'El pedido debe estar en estado EN_PROCESO' });
     }
 
-    // Calcular fecha estimada de entrega (hoy + 1 día hábil)
     const mañana = new Date();
     mañana.setDate(mañana.getDate() + 1);
 
@@ -128,7 +127,7 @@ router.patch('/pedidos/:id/listo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Confirmar pago en efectivo (cobrando en lavandería) ─────
+// ─── Confirmar pago en efectivo ──────────────────────────────
 router.patch('/pedidos/:id/confirmar-pago', async (req, res, next) => {
   try {
     const pago = await prisma.pago.findUnique({ where: { pedidoId: req.params.id } });
@@ -146,23 +145,25 @@ router.patch('/pedidos/:id/confirmar-pago', async (req, res, next) => {
 });
 
 // ─── Resumen de carga diaria ──────────────────────────────────
+// FIX: Usar $transaction para ejecutar las 4 queries en 1 sola conexión
 router.get('/resumen', async (req, res, next) => {
   try {
     const hoy = new Date();
     const inicioDia = new Date(hoy.setHours(0, 0, 0, 0));
 
-    // Run sequentially to avoid hitting connection limit
-    const recolectados = await prisma.pedido.count({ where: { estado: 'RECOLECTADO' } });
-    const enProceso = await prisma.pedido.count({ where: { estado: 'EN_PROCESO' } });
-    const listos = await prisma.pedido.count({ where: { estado: 'LISTO' } });
-    const entregadosHoy = await prisma.pedido.count({
-      where: { estado: 'ENTREGADO', fechaEntregaReal: { gte: inicioDia } },
-    });
+    const [recolectados, enProceso, listos, entregadosHoy] = await prisma.$transaction([
+      prisma.pedido.count({ where: { estado: 'RECOLECTADO' } }),
+      prisma.pedido.count({ where: { estado: 'EN_PROCESO' } }),
+      prisma.pedido.count({ where: { estado: 'LISTO' } }),
+      prisma.pedido.count({
+        where: { estado: 'ENTREGADO', fechaEntregaReal: { gte: inicioDia } },
+      }),
+    ]);
 
     res.json({ recolectados, enProceso, listos, entregadosHoy });
-  } catch (err) { 
+  } catch (err) {
     console.error('Error in /resumen:', err);
-    next(err); 
+    next(err);
   }
 });
 
@@ -240,6 +241,7 @@ router.get('/repartidores', async (req, res, next) => {
 });
 
 // ─── Asignar repartidor de entrega (pedidos LISTO) ────────────
+// FIX: Usar $transaction para las 3 operaciones de escritura
 router.patch('/pedidos/:id/asignar-entrega', async (req, res, next) => {
   try {
     const { repartidorId } = req.body;
@@ -247,7 +249,8 @@ router.patch('/pedidos/:id/asignar-entrega', async (req, res, next) => {
       return res.status(400).json({ error: 'El repartidorId es obligatorio' });
     }
 
-    const [pedido, repartidor] = await Promise.all([
+    // Validaciones previas con 1 sola conexión usando $transaction
+    const [pedido, repartidor] = await prisma.$transaction([
       prisma.pedido.findUnique({ where: { id: req.params.id } }),
       prisma.repartidor.findUnique({ where: { id: repartidorId } }),
     ]);
@@ -261,24 +264,28 @@ router.patch('/pedidos/:id/asignar-entrega', async (req, res, next) => {
       return res.status(400).json({ error: 'El repartidor está inactivo' });
     }
 
-    const pedidoActualizado = await prisma.pedido.update({
-      where: { id: req.params.id },
-      data: { repartidorEntregaId: repartidorId },
-    });
+    const pedidoActualizado = await prisma.$transaction(async (tx) => {
+      const actualizado = await tx.pedido.update({
+        where: { id: req.params.id },
+        data: { repartidorEntregaId: repartidorId },
+      });
 
-    await prisma.historialPedido.create({
-      data: {
-        id: uuidv4(),
-        pedidoId: req.params.id,
-        estado: 'LISTO',
-        nota: `Repartidor de entrega asignado por empleado`,
-        creadoPor: req.user.id,
-      },
-    });
+      await tx.historialPedido.create({
+        data: {
+          id: uuidv4(),
+          pedidoId: req.params.id,
+          estado: 'LISTO',
+          nota: 'Repartidor de entrega asignado por empleado',
+          creadoPor: req.user.id,
+        },
+      });
 
-    await prisma.repartidor.update({
-      where: { id: repartidorId },
-      data: { estado: 'OCUPADO' },
+      await tx.repartidor.update({
+        where: { id: repartidorId },
+        data: { estado: 'OCUPADO' },
+      });
+
+      return actualizado;
     });
 
     res.json({ mensaje: 'Repartidor de entrega asignado', pedido: pedidoActualizado });
@@ -296,7 +303,7 @@ router.patch('/pedidos/:id/asignar-repartidor', async (req, res, next) => {
       return res.status(400).json({ error: 'Tipo de asignación inválido' });
     }
 
-    const [pedido, repartidor] = await Promise.all([
+    const [pedido, repartidor] = await prisma.$transaction([
       prisma.pedido.findUnique({ where: { id: req.params.id } }),
       prisma.repartidor.findUnique({ where: { id: repartidorId } }),
     ]);
@@ -374,17 +381,15 @@ router.get('/ventas-diarias', async (req, res, next) => {
     desde.setDate(desde.getDate() - numDias);
     desde.setHours(0, 0, 0, 0);
 
-    // Get all orders in date range with payments
     const pedidos = await prisma.pedido.findMany({
       where: { createdAt: { gte: desde } },
       include: { pago: { select: { estado: true, monto: true } } },
-      orderBy: { createdAt: 'asc' }
+      orderBy: { createdAt: 'asc' },
     });
 
-    // Group by date
     const grouped = {};
     pedidos.forEach(pedido => {
-      const fecha = pedido.createdAt.toISOString().split('T')[0]; // YYYY-MM-DD
+      const fecha = pedido.createdAt.toISOString().split('T')[0];
       if (!grouped[fecha]) {
         grouped[fecha] = { totalPedidos: 0, entregados: 0, ingresos: 0 };
       }
@@ -393,14 +398,13 @@ router.get('/ventas-diarias', async (req, res, next) => {
         grouped[fecha].entregados++;
       }
       if (pedido.pago && pedido.pago.estado === 'COMPLETADO') {
-        grouped[fecha].ingresos += pedido.pago.monto.toNumber();
+        grouped[fecha].ingresos += Number(pedido.pago.monto);
       }
     });
 
-    // Convert to array and sort
     const resultado = Object.entries(grouped).map(([fecha, data]) => ({
-      fecha: new Date(fecha),
-      ...data
+      fecha: new Date(fecha + 'T00:00:00.000Z'),
+      ...data,
     }));
 
     res.json(resultado);
@@ -411,19 +415,17 @@ router.get('/ventas-diarias', async (req, res, next) => {
 });
 
 // ─── Crear pedido presencial ──────────────────────────────────
-// POST /api/empleados/pedidos
-// El empleado crea un pedido en nombre de un cliente que llegó a la tienda.
-// No requiere direccionId (es presencial), pero puede incluir datos opcionales.
+// FIX: Agrupar las 5 operaciones de escritura en 1 $transaction
 router.post('/pedidos', async (req, res, next) => {
   try {
     const {
-      clienteNombre,    // nombre del cliente presencial (requerido)
-      clienteApellido,  // apellido
-      clienteTelefono,  // teléfono para contacto
-      prendas,          // [{ tipo, cantidad }]
-      metodoPago,       // 'EFECTIVO' | 'PAYPAL'
-      notasInternas,    // notas del empleado
-      clienteId,        // si el cliente ya está registrado en el sistema
+      clienteNombre,
+      clienteApellido,
+      clienteTelefono,
+      prendas,
+      metodoPago,
+      notasInternas,
+      clienteId,
     } = req.body;
 
     // Validaciones básicas
@@ -437,8 +439,18 @@ router.post('/pedidos', async (req, res, next) => {
       return res.status(400).json({ error: 'Debes indicar el nombre del cliente o seleccionar un cliente registrado' });
     }
 
-    // Cargar catálogo activo
-    const catalogo = await prisma.catalogoPrenda.findMany({ where: { activo: true } });
+    // Cargar catálogo y validar cliente en paralelo (1 sola conexión)
+    const [catalogo, clienteExiste] = await prisma.$transaction([
+      prisma.catalogoPrenda.findMany({ where: { activo: true } }),
+      clienteId
+        ? prisma.usuario.findUnique({ where: { id: clienteId }, select: { id: true, rol: true } })
+        : prisma.usuario.findUnique({ where: { id: req.user.id }, select: { id: true, rol: true } }),
+    ]);
+
+    if (clienteId && !clienteExiste) {
+      return res.status(404).json({ error: 'Cliente no encontrado en el sistema' });
+    }
+
     const catalogoMap = Object.fromEntries(catalogo.map(c => [c.nombre.toLowerCase(), c]));
 
     // Calcular prendas
@@ -454,40 +466,21 @@ router.post('/pedidos', async (req, res, next) => {
       const item = catalogoMap[tipo];
       if (!item) return res.status(400).json({ error: `Tipo de prenda no encontrado en catálogo: "${tipo}"` });
       totalPrendas += cantidad;
-      prendasData.push({ tipo, cantidad, precio: item.precioUnitario });
+      prendasData.push({ tipo, cantidad, precio: item.precioUnitario, precioExtra: item.precioExtra });
     }
 
     const tienePrendasExtra = totalPrendas > 10;
-
-    // Si hay cargo extra, recalcular precios
     if (tienePrendasExtra) {
       for (const p of prendasData) {
-        const item = catalogoMap[p.tipo];
-        p.precio = item.precioUnitario + item.precioExtra;
+        p.precio = p.precio + p.precioExtra;
       }
     }
 
     const montoTotal = prendasData.reduce((acc, p) => acc + p.precio * p.cantidad, 0);
+    const clienteFinalId = clienteId || req.user.id;
 
-    // Determinar el clienteId final
-    // Si no se pasa un clienteId, usar el ID del empleado como proxy
-    // (el pedido queda "sin cliente registrado" pero con notas del cliente)
-    let clienteFinalId = clienteId || null;
-
-    // Si se proporciona clienteId, verificar que existe
-    if (clienteFinalId) {
-      const clienteExiste = await prisma.usuario.findUnique({
-        where: { id: clienteFinalId },
-        select: { id: true, rol: true },
-      });
-      if (!clienteExiste) {
-        return res.status(404).json({ error: 'Cliente no encontrado en el sistema' });
-      }
-    }
-
-    // Construir notas internas con datos del cliente presencial
     let notasInternasCompletas = notasInternas || '';
-    if (!clienteFinalId && clienteNombre) {
+    if (!clienteId && clienteNombre) {
       const datosCliente = [
         `Cliente presencial: ${clienteNombre} ${clienteApellido || ''}`.trim(),
         clienteTelefono ? `Tel: ${clienteTelefono}` : null,
@@ -497,67 +490,57 @@ router.post('/pedidos', async (req, res, next) => {
         : datosCliente;
     }
 
-    // Si no hay cliente registrado, usar el ID del empleado como "cliente"
-    // (es un workaround: el campo clienteId es NOT NULL en el schema)
-    if (!clienteFinalId) {
-      clienteFinalId = req.user.id;
-    }
+    const pedidoId = uuidv4();
 
-    // Crear pedido + prendas + pago en secuencia (sin transaction para evitar timeout)
-    const pedido = await prisma.pedido.create({
-      data: {
-        id: uuidv4(),
-        clienteId: clienteFinalId,
-        estado: 'RECOLECTADO',   // presencial: ya está en la tienda → directo a RECOLECTADO
-        totalPrendas,
-        tienePrendasExtra,
-        notasCliente: `Pedido presencial — ${clienteNombre || 'Cliente'} ${clienteApellido || ''}`.trim(),
-        notasInternas: notasInternasCompletas || null,
-        // Sin dirección (es presencial)
-      },
-      include: {
-        prendas: true,
-        pago: true,
-      },
+    // FIX: Todas las escrituras en 1 sola $transaction → 1 sola conexión
+    await prisma.$transaction(async (tx) => {
+      await tx.pedido.create({
+        data: {
+          id: pedidoId,
+          clienteId: clienteFinalId,
+          estado: 'RECOLECTADO',
+          totalPrendas,
+          tienePrendasExtra,
+          notasCliente: `Pedido presencial — ${clienteNombre || 'Cliente'} ${clienteApellido || ''}`.trim(),
+          notasInternas: notasInternasCompletas || null,
+        },
+      });
+
+      await tx.prenda.createMany({
+        data: prendasData.map(p => ({
+          id: uuidv4(),
+          pedidoId,
+          tipo: p.tipo,
+          cantidad: p.cantidad,
+          precio: p.precio,
+        })),
+      });
+
+      await tx.pago.create({
+        data: {
+          id: uuidv4(),
+          pedidoId,
+          monto: montoTotal,
+          metodoPago,
+          estado: 'PENDIENTE',
+          recolectadoPor: req.user.id,
+        },
+      });
+
+      await tx.historialPedido.create({
+        data: {
+          id: uuidv4(),
+          pedidoId,
+          estado: 'RECOLECTADO',
+          nota: `Pedido presencial creado por empleado. Cliente: ${clienteNombre || ''} ${clienteApellido || ''}`.trim(),
+          creadoPor: req.user.id,
+        },
+      });
     });
 
-    // Crear prendas
-    await prisma.prenda.createMany({
-      data: prendasData.map(p => ({
-        id: uuidv4(),
-        pedidoId: pedido.id,
-        tipo: p.tipo,
-        cantidad: p.cantidad,
-        precio: p.precio,
-      })),
-    });
-
-    // Crear pago
-    await prisma.pago.create({
-      data: {
-        id: uuidv4(),
-        pedidoId: pedido.id,
-        monto: montoTotal,
-        metodoPago,
-        estado: metodoPago === 'EFECTIVO' ? 'PENDIENTE' : 'PENDIENTE',
-        recolectadoPor: req.user.id,
-      },
-    });
-
-    // Crear historial
-    await prisma.historialPedido.create({
-      data: {
-        id: uuidv4(),
-        pedidoId: pedido.id,
-        estado: 'RECOLECTADO',
-        nota: `Pedido presencial creado por empleado. Cliente: ${clienteNombre || ''} ${clienteApellido || ''}`.trim(),
-        creadoPor: req.user.id,
-      },
-    });
-
-    // Obtener pedido completo para la respuesta
+    // 1 sola query al final para devolver el pedido completo
     const pedidoCompleto = await prisma.pedido.findUnique({
-      where: { id: pedido.id },
+      where: { id: pedidoId },
       include: {
         prendas: true,
         pago: true,
@@ -573,7 +556,6 @@ router.post('/pedidos', async (req, res, next) => {
 });
 
 // ─── Buscar clientes registrados ──────────────────────────────
-// GET /api/empleados/clientes?q=texto
 router.get('/clientes', async (req, res, next) => {
   try {
     const { q } = req.query;
