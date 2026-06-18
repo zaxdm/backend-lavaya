@@ -2,7 +2,8 @@
 // Datasource: MySQL en Clever Cloud
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x"]
 }
 
 datasource db {
