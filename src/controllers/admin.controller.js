@@ -16,18 +16,21 @@ const listarUsuarios = async (req, res, next) => {
     if (activo !== undefined) where.activo = activo === 'true';
     if (buscar) {
       where.OR = [
-        { nombre: { contains: buscar } },
+        { nombre:   { contains: buscar } },
         { apellido: { contains: buscar } },
-        { email: { contains: buscar } },
+        { email:    { contains: buscar } },
       ];
     }
 
-    const [usuariosBase, total] = await Promise.all([
+    // FIX: 2 queries en 1 $transaction en lugar de 4 Promise.all separados
+    const [usuariosBase, total] = await prisma.$transaction([
       prisma.usuario.findMany({
         where,
         select: {
           id: true, nombre: true, apellido: true, email: true,
           telefono: true, rol: true, activo: true, createdAt: true,
+          puntos:      { select: { saldo: true } },
+          repartidor:  { select: { estado: true, calificacionPromedio: true, totalServicios: true } },
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -36,49 +39,12 @@ const listarUsuarios = async (req, res, next) => {
       prisma.usuario.count({ where }),
     ]);
 
-    const usuarioIds = usuariosBase.map((u) => u.id);
-    const [puntos, repartidores] = await Promise.all([
-      prisma.puntos.findMany({
-        where: { usuarioId: { in: usuarioIds } },
-        select: { usuarioId: true, saldo: true },
-      }).catch((err) => {
-        console.warn('[Admin:listarUsuarios] No se pudieron cargar puntos:', err.message);
-        return [];
-      }),
-      prisma.repartidor.findMany({
-        where: { usuarioId: { in: usuarioIds } },
-        select: {
-          usuarioId: true,
-          estado: true,
-          calificacionPromedio: true,
-          totalServicios: true,
-        },
-      }).catch((err) => {
-        console.warn('[Admin:listarUsuarios] No se pudieron cargar repartidores:', err.message);
-        return [];
-      }),
-    ]);
-
-    const puntosPorUsuario = new Map(puntos.map((p) => [p.usuarioId, { saldo: p.saldo }]));
-    const repartidorPorUsuario = new Map(repartidores.map((r) => [
-      r.usuarioId,
-      {
-        estado: r.estado,
-        calificacionPromedio: r.calificacionPromedio,
-        totalServicios: r.totalServicios,
-      },
-    ]));
-    const usuarios = usuariosBase.map((u) => ({
-      ...u,
-      puntos: puntosPorUsuario.get(u.id) ?? null,
-      repartidor: repartidorPorUsuario.get(u.id) ?? null,
-    }));
-
     res.json({
-      usuarios,
+      usuarios: usuariosBase,
       paginacion: {
-        total, pagina: parseInt(page),
-        porPagina: parseInt(limit),
+        total,
+        pagina:      parseInt(page),
+        porPagina:   parseInt(limit),
         totalPaginas: Math.ceil(total / parseInt(limit)),
       },
     });
@@ -109,7 +75,7 @@ const obtenerUsuario = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// POST /api/admin/usuarios  (crear empleado / admin / repartidor)
+// POST /api/admin/usuarios
 const crearUsuario = async (req, res, next) => {
   try {
     const { nombre, apellido, email, password, telefono, rol } = req.body;
@@ -121,12 +87,10 @@ const crearUsuario = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Si el rol es REPARTIDOR, crear el perfil de repartidor en la misma transacción
     const usuario = await prisma.$transaction(async (tx) => {
       const nuevoUsuario = await tx.usuario.create({
         data: {
-          id: uuidv4(),
-          nombre, apellido, email, passwordHash,
+          id: uuidv4(), nombre, apellido, email, passwordHash,
           telefono: telefono || null,
           rol: rolFinal,
         },
@@ -138,11 +102,7 @@ const crearUsuario = async (req, res, next) => {
 
       if (rolFinal === 'REPARTIDOR') {
         await tx.repartidor.create({
-          data: {
-            id: uuidv4(),
-            usuarioId: nuevoUsuario.id,
-            estado: 'DISPONIBLE',
-          },
+          data: { id: uuidv4(), usuarioId: nuevoUsuario.id, estado: 'DISPONIBLE' },
         });
       }
 
@@ -153,23 +113,24 @@ const crearUsuario = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// PATCH /api/admin/usuarios/:id/estado  (activar/desactivar)
+// PATCH /api/admin/usuarios/:id/estado
 const toggleEstadoUsuario = async (req, res, next) => {
   try {
     const { activo } = req.body;
     if (typeof activo !== 'boolean') {
       return res.status(400).json({ error: 'El campo "activo" debe ser booleano' });
     }
-    // No puede desactivarse a sí mismo
     if (req.params.id === req.user.id) {
       return res.status(400).json({ error: 'No puedes desactivar tu propia cuenta' });
     }
-    await prisma.usuario.update({ where: { id: req.params.id }, data: { activo } });
 
-    // Revocar tokens si se desactiva
-    if (!activo) {
-      await prisma.refreshToken.deleteMany({ where: { usuarioId: req.params.id } });
-    }
+    await prisma.$transaction(async (tx) => {
+      await tx.usuario.update({ where: { id: req.params.id }, data: { activo } });
+      if (!activo) {
+        await tx.refreshToken.deleteMany({ where: { usuarioId: req.params.id } });
+      }
+    });
+
     res.json({ mensaje: `Usuario ${activo ? 'activado' : 'desactivado'}` });
   } catch (err) { next(err); }
 };
@@ -197,7 +158,8 @@ const listarPedidos = async (req, res, next) => {
       ];
     }
 
-    const [pedidos, total] = await Promise.all([
+    // FIX: $transaction en lugar de Promise.all
+    const [pedidos, total] = await prisma.$transaction([
       prisma.pedido.findMany({
         where,
         include: {
@@ -223,8 +185,9 @@ const listarPedidos = async (req, res, next) => {
     res.json({
       pedidos,
       paginacion: {
-        total, pagina: parseInt(page),
-        porPagina: parseInt(limit),
+        total,
+        pagina:      parseInt(page),
+        porPagina:   parseInt(limit),
         totalPaginas: Math.ceil(total / parseInt(limit)),
       },
     });
@@ -236,13 +199,13 @@ const asignarRepartidor = async (req, res, next) => {
   try {
     const { repartidorId, tipo = 'recoleccion' } = req.body;
 
-    const [pedido, repartidor] = await Promise.all([
+    const [pedido, repartidor] = await prisma.$transaction([
       prisma.pedido.findUnique({ where: { id: req.params.id } }),
       prisma.repartidor.findUnique({ where: { id: repartidorId } }),
     ]);
 
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
-    if (!repartidor) return res.status(404).json({ error: 'Repartidor no encontrado' });
+    if (!pedido)      return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!repartidor)  return res.status(404).json({ error: 'Repartidor no encontrado' });
     if (repartidor.estado === 'INACTIVO') {
       return res.status(400).json({ error: 'El repartidor está inactivo' });
     }
@@ -269,7 +232,7 @@ const asignarRepartidor = async (req, res, next) => {
           prendas: true,
           cliente: { select: { nombre: true, apellido: true } },
           repartidorRecoleccion: { include: { usuario: { select: { nombre: true } } } },
-          repartidorEntrega: { include: { usuario: { select: { nombre: true } } } },
+          repartidorEntrega:     { include: { usuario: { select: { nombre: true } } } },
         },
       });
 
@@ -287,7 +250,6 @@ const asignarRepartidor = async (req, res, next) => {
 
 // ─── CATÁLOGO DE PRENDAS ──────────────────────────────────────
 
-// GET /api/admin/catalogo
 const listarCatalogo = async (req, res, next) => {
   try {
     const catalogo = await prisma.catalogoPrenda.findMany({ orderBy: { nombre: 'asc' } });
@@ -295,7 +257,6 @@ const listarCatalogo = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// POST /api/admin/catalogo
 const crearItemCatalogo = async (req, res, next) => {
   try {
     const { nombre, descripcion, precioUnitario, precioExtra } = req.body;
@@ -315,18 +276,17 @@ const crearItemCatalogo = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// PATCH /api/admin/catalogo/:id
 const actualizarItemCatalogo = async (req, res, next) => {
   try {
     const { nombre, descripcion, precioUnitario, precioExtra, activo } = req.body;
     const item = await prisma.catalogoPrenda.update({
       where: { id: req.params.id },
       data: {
-        ...(nombre !== undefined && { nombre: nombre.toLowerCase().trim() }),
-        ...(descripcion !== undefined && { descripcion }),
+        ...(nombre        !== undefined && { nombre: nombre.toLowerCase().trim() }),
+        ...(descripcion   !== undefined && { descripcion }),
         ...(precioUnitario !== undefined && { precioUnitario: parseFloat(precioUnitario) }),
-        ...(precioExtra !== undefined && { precioExtra: parseFloat(precioExtra) }),
-        ...(activo !== undefined && { activo }),
+        ...(precioExtra   !== undefined && { precioExtra: parseFloat(precioExtra) }),
+        ...(activo        !== undefined && { activo }),
       },
     });
     res.json(item);
@@ -336,46 +296,60 @@ const actualizarItemCatalogo = async (req, res, next) => {
 // ─── REPORTES ─────────────────────────────────────────────────
 
 // GET /api/admin/reportes/stats
+// FIX: 12 queries separadas → 1 $transaction con todas juntas
 const statsGenerales = async (req, res, next) => {
   try {
-    console.log('Incoming request to /stats, user:', req.user);
-    const hoy = new Date();
-    const inicioDia = new Date(new Date().setHours(0, 0, 0, 0));
-    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const hoy        = new Date();
+    const inicioDia  = new Date(new Date().setHours(0, 0, 0, 0));
+    const inicioMes  = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
 
-    // Run all queries sequentially to avoid hitting connection limit
-    const totalUsuarios = await prisma.usuario.count({ where: { activo: true } });
-    const totalClientes = await prisma.usuario.count({ where: { rol: 'CLIENTE', activo: true } });
-    const totalRepartidores = await prisma.usuario.count({ where: { rol: 'REPARTIDOR', activo: true } });
-    const repartidoresDisponibles = await prisma.repartidor.count({ where: { estado: 'DISPONIBLE' } });
-    const totalPedidos = await prisma.pedido.count();
-    const pedidosHoy = await prisma.pedido.count({ where: { createdAt: { gte: inicioDia } } });
-    const pedidosPendientes = await prisma.pedido.count({ where: { estado: 'PENDIENTE' } });
-    const pedidosEnProceso = await prisma.pedido.count({ where: { estado: { in: ['CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO', 'EN_CAMINO'] } } });
-    const pedidosMes = await prisma.pedido.count({ where: { createdAt: { gte: inicioMes } } });
-    const totalPagosCompletados = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO' }, _sum: { monto: true } });
-    const pagosHoy = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioDia } }, _sum: { monto: true } });
-    const pagosMes = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioMes } }, _sum: { monto: true } });
+    const [
+      totalUsuarios,
+      totalClientes,
+      totalRepartidores,
+      repartidoresDisponibles,
+      totalPedidos,
+      pedidosHoy,
+      pedidosPendientes,
+      pedidosEnProceso,
+      pedidosMes,
+      totalPagosCompletados,
+      pagosHoy,
+      pagosMes,
+    ] = await prisma.$transaction([
+      prisma.usuario.count({ where: { activo: true } }),
+      prisma.usuario.count({ where: { rol: 'CLIENTE', activo: true } }),
+      prisma.usuario.count({ where: { rol: 'REPARTIDOR', activo: true } }),
+      prisma.repartidor.count({ where: { estado: 'DISPONIBLE' } }),
+      prisma.pedido.count(),
+      prisma.pedido.count({ where: { createdAt: { gte: inicioDia } } }),
+      prisma.pedido.count({ where: { estado: 'PENDIENTE' } }),
+      prisma.pedido.count({ where: { estado: { in: ['CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO', 'EN_CAMINO'] } } }),
+      prisma.pedido.count({ where: { createdAt: { gte: inicioMes } } }),
+      prisma.pago.aggregate({ where: { estado: 'COMPLETADO' },                              _sum: { monto: true } }),
+      prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioDia } }, _sum: { monto: true } }),
+      prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioMes } }, _sum: { monto: true } }),
+    ]);
 
     res.json({
       usuarios: { total: totalUsuarios, clientes: totalClientes, repartidores: totalRepartidores },
       pedidos: {
-        total: totalPedidos,
-        hoy: pedidosHoy,
-        esteMes: pedidosMes,
-        pendientes: pedidosPendientes,
-        enProceso: pedidosEnProceso,
+        total:       totalPedidos,
+        hoy:         pedidosHoy,
+        esteMes:     pedidosMes,
+        pendientes:  pedidosPendientes,
+        enProceso:   pedidosEnProceso,
       },
       ingresos: {
-        total: totalPagosCompletados._sum.monto || 0,
-        hoy: pagosHoy._sum.monto || 0,
-        esteMes: pagosMes._sum.monto || 0,
+        total:    Number(totalPagosCompletados._sum.monto) || 0,
+        hoy:      Number(pagosHoy._sum.monto)              || 0,
+        esteMes:  Number(pagosMes._sum.monto)              || 0,
       },
       repartidoresDisponibles,
     });
-  } catch (err) { 
+  } catch (err) {
     console.error('Error in /stats:', err);
-    next(err); 
+    next(err);
   }
 };
 
@@ -390,33 +364,28 @@ const pedidosPorDia = async (req, res, next) => {
 
     const pedidos = await prisma.pedido.findMany({
       where: { createdAt: { gte: desde } },
-      orderBy: { createdAt: 'asc' }
+      select: { createdAt: true, estado: true },
+      orderBy: { createdAt: 'asc' },
     });
 
     const grouped = {};
     pedidos.forEach(pedido => {
       const fecha = pedido.createdAt.toISOString().split('T')[0];
-      if (!grouped[fecha]) {
-        grouped[fecha] = { total: 0, entregados: 0, cancelados: 0 };
-      }
+      if (!grouped[fecha]) grouped[fecha] = { total: 0, entregados: 0, cancelados: 0 };
       grouped[fecha].total++;
-      if (pedido.estado === 'ENTREGADO') {
-        grouped[fecha].entregados++;
-      }
-      if (pedido.estado === 'CANCELADO') {
-        grouped[fecha].cancelados++;
-      }
+      if (pedido.estado === 'ENTREGADO') grouped[fecha].entregados++;
+      if (pedido.estado === 'CANCELADO') grouped[fecha].cancelados++;
     });
 
     const resultado = Object.entries(grouped).map(([fecha, data]) => ({
-      fecha: new Date(fecha),
-      ...data
+      fecha: new Date(fecha + 'T00:00:00.000Z'),
+      ...data,
     }));
 
     res.json(resultado);
-  } catch (err) { 
+  } catch (err) {
     console.error('Error in /pedidos-por-dia:', err);
-    next(err); 
+    next(err);
   }
 };
 
@@ -430,53 +399,44 @@ const ingresosPorDia = async (req, res, next) => {
     desde.setHours(0, 0, 0, 0);
 
     const pagos = await prisma.pago.findMany({
-      where: { 
-        estado: 'COMPLETADO',
-        createdAt: { gte: desde }
-      },
-      orderBy: { createdAt: 'asc' }
+      where: { estado: 'COMPLETADO', createdAt: { gte: desde } },
+      select: { createdAt: true, monto: true, metodoPago: true },
+      orderBy: { createdAt: 'asc' },
     });
 
     const grouped = {};
     pagos.forEach(pago => {
       const fecha = pago.createdAt.toISOString().split('T')[0];
       if (!grouped[fecha]) {
-        grouped[fecha] = { 
-          totalPagos: 0, 
-          ingresoTotal: 0, 
-          ingresoPaypal: 0, 
-          ingresoEfectivo: 0 
-        };
+        grouped[fecha] = { totalPagos: 0, ingresoTotal: 0, ingresoPaypal: 0, ingresoEfectivo: 0 };
       }
+      const monto = Number(pago.monto);
       grouped[fecha].totalPagos++;
-      const monto = pago.monto.toNumber();
       grouped[fecha].ingresoTotal += monto;
-      if (pago.metodoPago === 'PAYPAL') {
-        grouped[fecha].ingresoPaypal += monto;
-      }
-      if (pago.metodoPago === 'EFECTIVO') {
-        grouped[fecha].ingresoEfectivo += monto;
-      }
+      if (pago.metodoPago === 'PAYPAL')   grouped[fecha].ingresoPaypal   += monto;
+      if (pago.metodoPago === 'EFECTIVO') grouped[fecha].ingresoEfectivo += monto;
     });
 
     const resultado = Object.entries(grouped).map(([fecha, data]) => ({
-      fecha: new Date(fecha),
-      ...data
+      fecha: new Date(fecha + 'T00:00:00.000Z'),
+      ...data,
     }));
 
     res.json(resultado);
-  } catch (err) { 
+  } catch (err) {
     console.error('Error in /ingresos-por-dia:', err);
-    next(err); 
+    next(err);
   }
 };
 
 // GET /api/admin/reportes/prendas-populares
 const prendasPopulares = async (req, res, next) => {
   try {
-    const prendas = await prisma.prenda.findMany();
-    const grouped = {};
+    const prendas = await prisma.prenda.findMany({
+      select: { tipo: true, cantidad: true, pedidoId: true },
+    });
 
+    const grouped = {};
     prendas.forEach(prenda => {
       if (!grouped[prenda.tipo]) {
         grouped[prenda.tipo] = { totalLavadas: 0, aparicionEnPedidos: new Set() };
@@ -485,22 +445,23 @@ const prendasPopulares = async (req, res, next) => {
       grouped[prenda.tipo].aparicionEnPedidos.add(prenda.pedidoId);
     });
 
-    const resultado = Object.entries(grouped).map(([tipo, data]) => ({
-      tipo,
-      totalLavadas: data.totalLavadas,
-      aparicionEnPedidos: data.aparicionEnPedidos.size
-    })).sort((a, b) => b.totalLavadas - a.totalLavadas);
+    const resultado = Object.entries(grouped)
+      .map(([tipo, data]) => ({
+        tipo,
+        totalLavadas:      data.totalLavadas,
+        aparicionEnPedidos: data.aparicionEnPedidos.size,
+      }))
+      .sort((a, b) => b.totalLavadas - a.totalLavadas);
 
     res.json(resultado);
-  } catch (err) { 
+  } catch (err) {
     console.error('Error in /prendas-populares:', err);
-    next(err); 
+    next(err);
   }
 };
 
 // ─── REPARTIDORES ─────────────────────────────────────────────
 
-// GET /api/admin/repartidores
 const listarRepartidores = async (req, res, next) => {
   try {
     const { estado } = req.query;
