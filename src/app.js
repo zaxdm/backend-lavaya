@@ -80,6 +80,7 @@ app.use((req, res) => {
 // ─── Error handler global ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error('[Error]', err.message);
+  console.error('[Error Stack]', err.stack);
   const status = err.status || 500;
   res.status(status).json({
     error: err.message || 'Error interno del servidor',
