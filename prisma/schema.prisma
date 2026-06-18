@@ -172,7 +172,7 @@ model Repartidor {
 model Pedido {
   id                    String       @id @default(uuid())
   clienteId             String
-  direccionId           String
+  direccionId           String?
   repartidorRecoleccionId String?
   repartidorEntregaId   String?
   estado                EstadoPedido @default(PENDIENTE)
@@ -194,7 +194,7 @@ model Pedido {
 
   // Relaciones
   cliente               Usuario      @relation("PedidoCliente", fields: [clienteId], references: [id])
-  direccion             Direccion    @relation(fields: [direccionId], references: [id])
+  direccion             Direccion?   @relation(fields: [direccionId], references: [id])
   repartidorRecoleccion Repartidor?  @relation("PedidoRepartidorRecoleccion", fields: [repartidorRecoleccionId], references: [id])
   repartidorEntrega     Repartidor?  @relation("PedidoRepartidorEntrega", fields: [repartidorEntregaId], references: [id])
   prendas               Prenda[]

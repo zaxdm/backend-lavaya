@@ -426,6 +426,8 @@ router.post('/pedidos', async (req, res, next) => {
       metodoPago,
       notasInternas,
       clienteId,
+      direccionEntregaId,
+      direccionNueva,
     } = req.body;
 
     // Validaciones básicas
@@ -491,13 +493,41 @@ router.post('/pedidos', async (req, res, next) => {
     }
 
     const pedidoId = uuidv4();
+    let direccionIdFinal = null;
 
     // FIX: Todas las escrituras en 1 sola $transaction → 1 sola conexión
     await prisma.$transaction(async (tx) => {
+      // Si hay nueva dirección, crearla primero
+      if (direccionNueva) {
+        const newDireccion = await tx.direccion.create({
+          data: {
+            id: uuidv4(),
+            usuarioId: clienteFinalId,
+            calle: direccionNueva.calle,
+            numero: direccionNueva.numero,
+            colonia: direccionNueva.colonia,
+            ciudad: direccionNueva.ciudad,
+            estado: direccionNueva.estado || 'Desconocido',
+            codigoPostal: direccionNueva.codigoPostal || '00000',
+          },
+        });
+        direccionIdFinal = newDireccion.id;
+      } else if (direccionEntregaId) {
+        // Verificar que la dirección exista y pertenezca al cliente
+        const direccionExiste = await tx.direccion.findFirst({
+          where: { id: direccionEntregaId, usuarioId: clienteFinalId },
+        });
+        if (!direccionExiste) {
+          throw new Error('Dirección no encontrada o no pertenece al cliente');
+        }
+        direccionIdFinal = direccionEntregaId;
+      }
+
       await tx.pedido.create({
         data: {
           id: pedidoId,
           clienteId: clienteFinalId,
+          direccionId: direccionIdFinal,
           estado: 'RECOLECTADO',
           totalPrendas,
           tienePrendasExtra,
@@ -545,6 +575,7 @@ router.post('/pedidos', async (req, res, next) => {
         prendas: true,
         pago: true,
         historial: { orderBy: { createdAt: 'asc' } },
+        direccion: true,
       },
     });
 
@@ -552,7 +583,10 @@ router.post('/pedidos', async (req, res, next) => {
       mensaje: 'Pedido presencial creado correctamente',
       pedido: pedidoCompleto,
     });
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error creating in-person order:', err);
+    next(err); 
+  }
 });
 
 // ─── Buscar clientes registrados ──────────────────────────────
@@ -578,6 +612,18 @@ router.get('/clientes', async (req, res, next) => {
       take: 8,
     });
     res.json(clientes);
+  } catch (err) { next(err); }
+});
+
+// ─── Obtener direcciones de un cliente ────────────────────────
+router.get('/clientes/:clienteId/direcciones', async (req, res, next) => {
+  try {
+    const { clienteId } = req.params;
+    const direcciones = await prisma.direccion.findMany({
+      where: { usuarioId: clienteId },
+      orderBy: { esPrincipal: 'desc' },
+    });
+    res.json(direcciones);
   } catch (err) { next(err); }
 });
 
