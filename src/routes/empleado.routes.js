@@ -151,19 +151,19 @@ router.get('/resumen', async (req, res, next) => {
     const hoy = new Date();
     const inicioDia = new Date(hoy.setHours(0, 0, 0, 0));
 
-    const [recolectados, enProceso] = await Promise.all([
-      prisma.pedido.count({ where: { estado: 'RECOLECTADO' } }),
-      prisma.pedido.count({ where: { estado: 'EN_PROCESO' } }),
-    ]);
-    const [listos, entregadosHoy] = await Promise.all([
-      prisma.pedido.count({ where: { estado: 'LISTO' } }),
-      prisma.pedido.count({
-        where: { estado: 'ENTREGADO', fechaEntregaReal: { gte: inicioDia } },
-      }),
-    ]);
+    // Run sequentially to avoid hitting connection limit
+    const recolectados = await prisma.pedido.count({ where: { estado: 'RECOLECTADO' } });
+    const enProceso = await prisma.pedido.count({ where: { estado: 'EN_PROCESO' } });
+    const listos = await prisma.pedido.count({ where: { estado: 'LISTO' } });
+    const entregadosHoy = await prisma.pedido.count({
+      where: { estado: 'ENTREGADO', fechaEntregaReal: { gte: inicioDia } },
+    });
 
     res.json({ recolectados, enProceso, listos, entregadosHoy });
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error in /resumen:', err);
+    next(err); 
+  }
 });
 
 // ─── Catálogo (lectura + edición para empleado) ───────────────

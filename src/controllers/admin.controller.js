@@ -338,39 +338,23 @@ const actualizarItemCatalogo = async (req, res, next) => {
 // GET /api/admin/reportes/stats
 const statsGenerales = async (req, res, next) => {
   try {
+    console.log('Incoming request to /stats, user:', req.user);
     const hoy = new Date();
     const inicioDia = new Date(new Date().setHours(0, 0, 0, 0));
     const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
 
-    // Clever Cloud limita a 5 conexiones simultáneas.
-    // Ejecutamos en series de max 2 queries paralelas para evitar errores.
-
-    // Serie 1: Usuarios
-    const [totalUsuarios, totalClientes] = await Promise.all([
-      prisma.usuario.count({ where: { activo: true } }),
-      prisma.usuario.count({ where: { rol: 'CLIENTE', activo: true } }),
-    ]);
-    const [totalRepartidores, repartidoresDisponibles] = await Promise.all([
-      prisma.usuario.count({ where: { rol: 'REPARTIDOR', activo: true } }),
-      prisma.repartidor.count({ where: { estado: 'DISPONIBLE' } }),
-    ]);
-
-    // Serie 2: Pedidos
-    const [totalPedidos, pedidosHoy] = await Promise.all([
-      prisma.pedido.count(),
-      prisma.pedido.count({ where: { createdAt: { gte: inicioDia } } }),
-    ]);
-    const [pedidosPendientes, pedidosEnProceso] = await Promise.all([
-      prisma.pedido.count({ where: { estado: 'PENDIENTE' } }),
-      prisma.pedido.count({ where: { estado: { in: ['CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO', 'EN_CAMINO'] } } }),
-    ]);
-    const pedidosMes = await prisma.pedido.count({ where: { createdAt: { gte: inicioMes } } });
-
-    // Serie 3: Ingresos
-    const [totalPagosCompletados, pagosHoy] = await Promise.all([
-      prisma.pago.aggregate({ where: { estado: 'COMPLETADO' }, _sum: { monto: true } }),
-      prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioDia } }, _sum: { monto: true } }),
-    ]);
+    // Run all queries sequentially to avoid hitting connection limit
+    const totalUsuarios = await prisma.usuario.count({ where: { activo: true } });
+    const totalClientes = await prisma.usuario.count({ where: { rol: 'CLIENTE', activo: true } });
+    const totalRepartidores = await prisma.usuario.count({ where: { rol: 'REPARTIDOR', activo: true } });
+    const repartidoresDisponibles = await prisma.repartidor.count({ where: { estado: 'DISPONIBLE' } });
+    const totalPedidos = await prisma.pedido.count();
+    const pedidosHoy = await prisma.pedido.count({ where: { createdAt: { gte: inicioDia } } });
+    const pedidosPendientes = await prisma.pedido.count({ where: { estado: 'PENDIENTE' } });
+    const pedidosEnProceso = await prisma.pedido.count({ where: { estado: { in: ['CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO', 'EN_CAMINO'] } } });
+    const pedidosMes = await prisma.pedido.count({ where: { createdAt: { gte: inicioMes } });
+    const totalPagosCompletados = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO' }, _sum: { monto: true } });
+    const pagosHoy = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioDia } }, _sum: { monto: true } });
     const pagosMes = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioMes } }, _sum: { monto: true } });
 
     res.json({
@@ -389,7 +373,10 @@ const statsGenerales = async (req, res, next) => {
       },
       repartidoresDisponibles,
     });
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error in /stats:', err);
+    next(err); 
+  }
 };
 
 // GET /api/admin/reportes/pedidos-por-dia
