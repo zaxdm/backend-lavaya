@@ -70,7 +70,7 @@ const crearOrdenPaypal = async (req, res, next) => {
     res.json({
       pagoId: pago.id,
       monto: montoRedondeado,
-      moneda: 'USD', // PayPal v1 API doesn't support PEN, using USD as fallback
+      moneda: 'PEN',
       paypalClientId: process.env.PAYPAL_CLIENT_ID,
       paypalMode: process.env.PAYPAL_MODE || 'sandbox',
       descripcion: `LavaYa - Pedido ${pedidoId.slice(0, 8)} - ${pedido.prendas.length} prendas`,
