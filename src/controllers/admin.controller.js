@@ -352,7 +352,7 @@ const statsGenerales = async (req, res, next) => {
     const pedidosHoy = await prisma.pedido.count({ where: { createdAt: { gte: inicioDia } } });
     const pedidosPendientes = await prisma.pedido.count({ where: { estado: 'PENDIENTE' } });
     const pedidosEnProceso = await prisma.pedido.count({ where: { estado: { in: ['CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO', 'EN_CAMINO'] } } });
-    const pedidosMes = await prisma.pedido.count({ where: { createdAt: { gte: inicioMes } });
+    const pedidosMes = await prisma.pedido.count({ where: { createdAt: { gte: inicioMes } } });
     const totalPagosCompletados = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO' }, _sum: { monto: true } });
     const pagosHoy = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioDia } }, _sum: { monto: true } });
     const pagosMes = await prisma.pago.aggregate({ where: { estado: 'COMPLETADO', createdAt: { gte: inicioMes } }, _sum: { monto: true } });
