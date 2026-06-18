@@ -1,19 +1,25 @@
 // src/config/prisma.js
 // Clever Cloud MySQL free tier: máximo 5 conexiones simultáneas.
-// Reservamos 1 para consultas manuales → pool de 4.
+// Reservamos 1 para consultas manuales → pool de 2 para evitar hitting the limit.
 const { PrismaClient } = require('@prisma/client');
+
+let dbUrl = process.env.DATABASE_URL;
+// Ensure connection_limit is set to 2
+if (dbUrl && !dbUrl.includes('connection_limit')) {
+  const separator = dbUrl.includes('?') ? '&' : '?';
+  dbUrl = `${dbUrl}${separator}connection_limit=2`;
+} else if (dbUrl) {
+  // Replace existing connection_limit with 2
+  dbUrl = dbUrl.replace(/connection_limit=\d+/, 'connection_limit=2');
+}
 
 const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
   datasources: {
     db: {
-      url: process.env.DATABASE_URL,
+      url: dbUrl,
     },
   },
 });
-
-// Limitar el pool de conexiones vía connection_limit en la URL ya está en DATABASE_URL,
-// pero también lo forzamos aquí para que Prisma no abra más de 4 conexiones.
-// Añade ?connection_limit=4 a DATABASE_URL si no lo tiene ya.
 
 module.exports = prisma;
