@@ -383,66 +383,119 @@ const statsGenerales = async (req, res, next) => {
 const pedidosPorDia = async (req, res, next) => {
   try {
     const { dias = 30 } = req.query;
+    const numDias = parseInt(dias, 10) || 30;
     const desde = new Date();
-    desde.setDate(desde.getDate() - parseInt(dias));
+    desde.setDate(desde.getDate() - numDias);
     desde.setHours(0, 0, 0, 0);
 
-    // Agrupar con raw query para compatibilidad MySQL
-    const resultado = await prisma.$queryRaw`
-      SELECT
-        DATE(createdAt) AS fecha,
-        COUNT(*) AS total,
-        SUM(CASE WHEN estado = 'ENTREGADO' THEN 1 ELSE 0 END) AS entregados,
-        SUM(CASE WHEN estado = 'CANCELADO' THEN 1 ELSE 0 END) AS cancelados
-      FROM pedidos
-      WHERE createdAt >= ${desde}
-      GROUP BY DATE(createdAt)
-      ORDER BY fecha ASC
-    `;
+    const pedidos = await prisma.pedido.findMany({
+      where: { createdAt: { gte: desde } },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    const grouped = {};
+    pedidos.forEach(pedido => {
+      const fecha = pedido.createdAt.toISOString().split('T')[0];
+      if (!grouped[fecha]) {
+        grouped[fecha] = { total: 0, entregados: 0, cancelados: 0 };
+      }
+      grouped[fecha].total++;
+      if (pedido.estado === 'ENTREGADO') {
+        grouped[fecha].entregados++;
+      }
+      if (pedido.estado === 'CANCELADO') {
+        grouped[fecha].cancelados++;
+      }
+    });
+
+    const resultado = Object.entries(grouped).map(([fecha, data]) => ({
+      fecha: new Date(fecha),
+      ...data
+    }));
 
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error in /pedidos-por-dia:', err);
+    next(err); 
+  }
 };
 
 // GET /api/admin/reportes/ingresos-por-dia
 const ingresosPorDia = async (req, res, next) => {
   try {
     const { dias = 30 } = req.query;
+    const numDias = parseInt(dias, 10) || 30;
     const desde = new Date();
-    desde.setDate(desde.getDate() - parseInt(dias));
+    desde.setDate(desde.getDate() - numDias);
     desde.setHours(0, 0, 0, 0);
 
-    const resultado = await prisma.$queryRaw`
-      SELECT
-        DATE(p.createdAt) AS fecha,
-        COUNT(*) AS totalPagos,
-        SUM(p.monto) AS ingresoTotal,
-        SUM(CASE WHEN p.metodoPago = 'PAYPAL' THEN p.monto ELSE 0 END) AS ingresoPaypal,
-        SUM(CASE WHEN p.metodoPago = 'EFECTIVO' THEN p.monto ELSE 0 END) AS ingresoEfectivo
-      FROM pagos p
-      WHERE p.estado = 'COMPLETADO' AND p.createdAt >= ${desde}
-      GROUP BY DATE(p.createdAt)
-      ORDER BY fecha ASC
-    `;
+    const pagos = await prisma.pago.findMany({
+      where: { 
+        estado: 'COMPLETADO',
+        createdAt: { gte: desde }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    const grouped = {};
+    pagos.forEach(pago => {
+      const fecha = pago.createdAt.toISOString().split('T')[0];
+      if (!grouped[fecha]) {
+        grouped[fecha] = { 
+          totalPagos: 0, 
+          ingresoTotal: 0, 
+          ingresoPaypal: 0, 
+          ingresoEfectivo: 0 
+        };
+      }
+      grouped[fecha].totalPagos++;
+      const monto = pago.monto.toNumber();
+      grouped[fecha].ingresoTotal += monto;
+      if (pago.metodoPago === 'PAYPAL') {
+        grouped[fecha].ingresoPaypal += monto;
+      }
+      if (pago.metodoPago === 'EFECTIVO') {
+        grouped[fecha].ingresoEfectivo += monto;
+      }
+    });
+
+    const resultado = Object.entries(grouped).map(([fecha, data]) => ({
+      fecha: new Date(fecha),
+      ...data
+    }));
 
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error in /ingresos-por-dia:', err);
+    next(err); 
+  }
 };
 
 // GET /api/admin/reportes/prendas-populares
 const prendasPopulares = async (req, res, next) => {
   try {
-    const resultado = await prisma.$queryRaw`
-      SELECT
-        tipo,
-        SUM(cantidad) AS totalLavadas,
-        COUNT(DISTINCT pedidoId) AS aparicionEnPedidos
-      FROM prendas
-      GROUP BY tipo
-      ORDER BY totalLavadas DESC
-    `;
+    const prendas = await prisma.prenda.findMany();
+    const grouped = {};
+
+    prendas.forEach(prenda => {
+      if (!grouped[prenda.tipo]) {
+        grouped[prenda.tipo] = { totalLavadas: 0, aparicionEnPedidos: new Set() };
+      }
+      grouped[prenda.tipo].totalLavadas += prenda.cantidad;
+      grouped[prenda.tipo].aparicionEnPedidos.add(prenda.pedidoId);
+    });
+
+    const resultado = Object.entries(grouped).map(([tipo, data]) => ({
+      tipo,
+      totalLavadas: data.totalLavadas,
+      aparicionEnPedidos: data.aparicionEnPedidos.size
+    })).sort((a, b) => b.totalLavadas - a.totalLavadas);
+
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error('Error in /prendas-populares:', err);
+    next(err); 
+  }
 };
 
 // ─── REPARTIDORES ─────────────────────────────────────────────

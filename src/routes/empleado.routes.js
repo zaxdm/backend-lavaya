@@ -369,25 +369,45 @@ router.patch('/pedidos/:id/asignar-repartidor', async (req, res, next) => {
 router.get('/ventas-diarias', async (req, res, next) => {
   try {
     const { dias = 14 } = req.query;
+    const numDias = parseInt(dias, 10) || 14;
     const desde = new Date();
-    desde.setDate(desde.getDate() - parseInt(dias));
+    desde.setDate(desde.getDate() - numDias);
     desde.setHours(0, 0, 0, 0);
 
-    const resultado = await prisma.$queryRaw`
-      SELECT
-        DATE(p.createdAt) AS fecha,
-        COUNT(*)          AS totalPedidos,
-        SUM(CASE WHEN p.estado = 'ENTREGADO' THEN 1 ELSE 0 END) AS entregados,
-        COALESCE(SUM(CASE WHEN pg.estado = 'COMPLETADO' THEN pg.monto ELSE 0 END), 0) AS ingresos
-      FROM pedidos p
-      LEFT JOIN pagos pg ON pg.pedidoId = p.id
-      WHERE p.createdAt >= ${desde}
-      GROUP BY DATE(p.createdAt)
-      ORDER BY fecha ASC
-    `;
+    // Get all orders in date range with payments
+    const pedidos = await prisma.pedido.findMany({
+      where: { createdAt: { gte: desde } },
+      include: { pago: { select: { estado: true, monto: true } } },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    // Group by date
+    const grouped = {};
+    pedidos.forEach(pedido => {
+      const fecha = pedido.createdAt.toISOString().split('T')[0]; // YYYY-MM-DD
+      if (!grouped[fecha]) {
+        grouped[fecha] = { totalPedidos: 0, entregados: 0, ingresos: 0 };
+      }
+      grouped[fecha].totalPedidos++;
+      if (pedido.estado === 'ENTREGADO') {
+        grouped[fecha].entregados++;
+      }
+      if (pedido.pago && pedido.pago.estado === 'COMPLETADO') {
+        grouped[fecha].ingresos += pedido.pago.monto.toNumber();
+      }
+    });
+
+    // Convert to array and sort
+    const resultado = Object.entries(grouped).map(([fecha, data]) => ({
+      fecha: new Date(fecha),
+      ...data
+    }));
 
     res.json(resultado);
-  } catch (err) { next(err); }
+  } catch (err) {
+    console.error('Error in /ventas-diarias:', err);
+    next(err);
+  }
 });
 
 // ─── Crear pedido presencial ──────────────────────────────────
