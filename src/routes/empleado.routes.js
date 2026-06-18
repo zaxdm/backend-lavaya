@@ -16,10 +16,10 @@ router.get('/pedidos/en-proceso', async (req, res, next) => {
     const { estado } = req.query;
     const estados = estado
       ? [estado]
-      : ['RECOLECTADO', 'EN_PROCESO', 'LISTO'];
+      : ['PENDIENTE', 'CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO', 'LISTO'];
 
     const pedidos = await prisma.pedido.findMany({
-      where: { estado: { in: estados } },
+      where: { estado: { in: estados } },   
       include: {
         cliente: { select: { nombre: true, apellido: true, telefono: true } },
         prendas: true,
