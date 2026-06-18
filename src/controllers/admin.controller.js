@@ -22,14 +22,12 @@ const listarUsuarios = async (req, res, next) => {
       ];
     }
 
-    const [usuarios, total] = await Promise.all([
+    const [usuariosBase, total] = await Promise.all([
       prisma.usuario.findMany({
         where,
         select: {
           id: true, nombre: true, apellido: true, email: true,
           telefono: true, rol: true, activo: true, createdAt: true,
-          puntos: { select: { saldo: true } },
-          repartidor: { select: { estado: true, calificacionPromedio: true, totalServicios: true } },
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -37,6 +35,44 @@ const listarUsuarios = async (req, res, next) => {
       }),
       prisma.usuario.count({ where }),
     ]);
+
+    const usuarioIds = usuariosBase.map((u) => u.id);
+    const [puntos, repartidores] = await Promise.all([
+      prisma.puntos.findMany({
+        where: { usuarioId: { in: usuarioIds } },
+        select: { usuarioId: true, saldo: true },
+      }).catch((err) => {
+        console.warn('[Admin:listarUsuarios] No se pudieron cargar puntos:', err.message);
+        return [];
+      }),
+      prisma.repartidor.findMany({
+        where: { usuarioId: { in: usuarioIds } },
+        select: {
+          usuarioId: true,
+          estado: true,
+          calificacionPromedio: true,
+          totalServicios: true,
+        },
+      }).catch((err) => {
+        console.warn('[Admin:listarUsuarios] No se pudieron cargar repartidores:', err.message);
+        return [];
+      }),
+    ]);
+
+    const puntosPorUsuario = new Map(puntos.map((p) => [p.usuarioId, { saldo: p.saldo }]));
+    const repartidorPorUsuario = new Map(repartidores.map((r) => [
+      r.usuarioId,
+      {
+        estado: r.estado,
+        calificacionPromedio: r.calificacionPromedio,
+        totalServicios: r.totalServicios,
+      },
+    ]));
+    const usuarios = usuariosBase.map((u) => ({
+      ...u,
+      puntos: puntosPorUsuario.get(u.id) ?? null,
+      repartidor: repartidorPorUsuario.get(u.id) ?? null,
+    }));
 
     res.json({
       usuarios,
