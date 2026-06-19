@@ -46,6 +46,7 @@ const crearOrdenPaypal = async (req, res, next) => {
 
     const monto = calcularMonto(pedido.prendas);
     const montoRedondeado = Math.round(monto * 100) / 100;
+    // IMPORTANTE: monto almacenado en BD es en PEN, pero el cliente convierte a USD para PayPal
 
     // Registrar / actualizar intento de pago
     const pago = await prisma.pago.upsert({

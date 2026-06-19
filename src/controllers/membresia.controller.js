@@ -30,6 +30,7 @@ const crearOrdenPaypal = async (req, res, next) => {
     if (precio === undefined) {
       return res.status(400).json({ error: 'Tipo de membresía inválido' });
     }
+    // IMPORTANTE: precio almacenado en BD es en PEN, pero el cliente convierte a USD para PayPal
 
     // Deactivate existing active membership
     await prisma.membresia.updateMany({
