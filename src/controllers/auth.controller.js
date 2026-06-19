@@ -3,22 +3,29 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { OAuth2Client } = require('google-auth-library');
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const prisma = require('../config/prisma');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// Configurar nodemailer
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
-  port: parseInt(process.env.EMAIL_PORT || 587),
-  secure: process.env.EMAIL_SECURE === 'true',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+// Configurar transporter según entorno
+let transporter;
+let resend;
+if (process.env.NODE_ENV === 'production' && process.env.RESEND_API_KEY) {
+  resend = new Resend(process.env.RESEND_API_KEY);
+} else {
+  transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
+    port: parseInt(process.env.EMAIL_PORT || 587),
+    secure: process.env.EMAIL_SECURE === 'true',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+}
 
 // Función helper para generar código de 6 dígitos
 const generarCodigo6Digitos = () => {
@@ -302,28 +309,38 @@ const solicitarResetPassword = async (req, res, next) => {
 
     // Enviar email con el código
     try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_FROM || 'no-reply@lavaya.com',
-        to: email,
-        subject: 'Código de recuperación de contraseña - LavaYa',
-        text: `Tu código de recuperación es: ${codigoReset}\nEste código expira en 10 minutos.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #7C3AED;">Recuperación de Contraseña - LavaYa</h2>
-            <p>Hola ${usuario.nombre},</p>
-            <p>Tu código de recuperación es:</p>
-            <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
-              ${codigoReset}
-            </div>
-            <p>Este código expira en 10 minutos.</p>
-            <p>Si no solicitaste esto, ignora este correo.</p>
-            <p style="margin-top: 30px; color: #999; font-size: 12px;">
-              Saludos,<br>
-              El equipo de LavaYa
-            </p>
+      const fromEmail = process.env.EMAIL_FROM || 'no-reply@lavaya.com';
+      const subject = 'Código de recuperación de contraseña - LavaYa';
+      const text = `Tu código de recuperación es: ${codigoReset}\nEste código expira en 10 minutos.`;
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C3AED;">Recuperación de Contraseña - LavaYa</h2>
+          <p>Hola ${usuario.nombre},</p>
+          <p>Tu código de recuperación es:</p>
+          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
+            ${codigoReset}
           </div>
-        `,
-      });
+          <p>Este código expira en 10 minutos.</p>
+          <p>Si no solicitaste esto, ignora este correo.</p>
+          <p style="margin-top: 30px; color: #999; font-size: 12px;">
+            Saludos,<br>
+            El equipo de LavaYa
+          </p>
+        </div>
+      `;
+
+      if (resend) {
+        await resend.emails.send({
+          from: fromEmail,
+          to: email,
+          subject,
+          text,
+          html,
+        });
+      } else if (transporter) {
+        await transporter.sendMail({ from: fromEmail, to: email, subject, text, html });
+      }
+      
       console.log('Código de reset enviado a', email, ':', codigoReset);
     } catch (emailError) {
       console.error('Error al enviar email:', emailError);
