@@ -17,12 +17,12 @@ if (process.env.NODE_ENV === 'production' && process.env.RESEND_API_KEY) {
   resend = new Resend(process.env.RESEND_API_KEY);
 } else {
   transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
+    host: process.env.EMAIL_HOST || 'stebandioses@gmail.com',
     port: parseInt(process.env.EMAIL_PORT || 587),
     secure: process.env.EMAIL_SECURE === 'true',
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: process.env.EMAIL_USER || 'stebandioses@gmail.com',
+      pass: process.env.EMAIL_PASS || 'aL655TEC9030',
     },
   });
 }
