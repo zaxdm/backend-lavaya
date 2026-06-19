@@ -67,14 +67,14 @@ router.get('/puntos',          obtenerPuntos);
 router.post('/puntos/canjear', canjear);
 
 // ─── Membresías ──────────────────────────────────────────────
-router.get('/membresias', async (req, res, next) => {
-  try {
-    const membresias = await prisma.membresia.findMany({
-      where: { usuarioId: req.user.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(membresias);
-  } catch (err) { next(err); }
-});
+const {
+  crearOrdenPaypal: crearOrdenPaypalMembresia,
+  capturarPagoPaypal: capturarPagoPaypalMembresia,
+  getMembresiasUsuario,
+} = require('../controllers/membresia.controller');
+
+router.get('/membresias', getMembresiasUsuario);
+router.post('/membresias/paypal/crear-orden', crearOrdenPaypalMembresia);
+router.post('/membresias/paypal/capturar', capturarPagoPaypalMembresia);
 
 module.exports = router;
