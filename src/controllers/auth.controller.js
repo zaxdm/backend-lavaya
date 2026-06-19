@@ -1,8 +1,12 @@
 // src/controllers/auth.controller.js
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const { OAuth2Client } = require('google-auth-library');
 const prisma = require('../config/prisma');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // ─── Registro ────────────────────────────────────────────────
 const register = async (req, res, next) => {
@@ -173,4 +177,73 @@ const me = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, refresh, logout, me };
+// ─── Login con Google ─────────────────────────────────────────
+const loginGoogle = async (req, res, next) => {
+  try {
+    const { idToken } = req.body;
+
+    // Verificar el token de Google
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload) {
+      return res.status(401).json({ error: 'Token de Google inválido' });
+    }
+    const { sub: googleId, email, name, picture } = payload;
+    const [nombre, ...apellidoParts] = name?.split(' ') || ['Usuario', 'Nuevo'];
+    const apellido = apellidoParts.join(' ') || 'Sin Apellido';
+
+    // Buscar usuario por email (SÓLO PERMITIR INGRESAR SI EL EMAIL YA EXISTE)
+    let usuario = await prisma.usuario.findUnique({
+      where: { email },
+    });
+
+    if (!usuario) {
+      return res.status(403).json({ error: 'El email no está registrado. Por favor, registra tu cuenta primero.' });
+    }
+
+    // Si el usuario existe pero no tiene googleId, lo actualizamos
+    if (!usuario.googleId) {
+      usuario = await prisma.usuario.update({
+        where: { id: usuario.id },
+        data: {
+          googleId,
+          emailVerificado: true,
+          fotoPerfil: picture || usuario.fotoPerfil,
+        },
+      });
+    }
+
+    // Generar tokens como en login normal
+    const accessToken = generateAccessToken({ id: usuario.id, email: usuario.email, rol: usuario.rol });
+    const refreshToken = generateRefreshToken({ id: usuario.id });
+
+    await prisma.refreshToken.create({
+      data: {
+        id: uuidv4(),
+        token: refreshToken,
+        usuarioId: usuario.id,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    res.json({
+      usuario: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        apellido: usuario.apellido,
+        email: usuario.email,
+        rol: usuario.rol,
+      },
+      accessToken,
+      refreshToken,
+    });
+  } catch (err) {
+    console.error('Error en Google login:', err);
+    next(err);
+  }
+};
+
+module.exports = { register, login, loginGoogle, refresh, logout, me };

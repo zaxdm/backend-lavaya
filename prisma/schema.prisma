@@ -30,7 +30,7 @@ enum EstadoPedido {
   LISTO             // Listo para entrega
   EN_CAMINO         // Repartidor en ruta de entrega
   ENTREGADO         // Entregado al cliente
-  CANCELADO         // Cancelado
+  CANCELADO         // Canceladoa
 }
 
 enum EstadoPago {
@@ -73,7 +73,7 @@ model Usuario {
   apellido          String
   email             String     @unique
   telefono          String?
-  passwordHash      String
+  passwordHash      String?
   rol               Rol        @default(CLIENTE)
   activo            Boolean    @default(true)
   emailVerificado   Boolean    @default(false)
@@ -81,6 +81,8 @@ model Usuario {
   tokenReset        String?
   tokenResetExpira  DateTime?
   fotoPerfil        String?
+  googleId          String?    @unique
+  googleToken       String?
   empresaB2BId      String?    // FK hacia la empresa donde trabaja (empleados B2B)
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
