@@ -2,34 +2,14 @@
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { OAuth2Client } = require('google-auth-library');
-const nodemailer = require('nodemailer');
-const { Resend } = require('resend');
+
 const prisma = require('../config/prisma');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-// Configurar transporter según entorno
-let transporter;
-let resend;
-if (process.env.NODE_ENV === 'production' && process.env.RESEND_API_KEY) {
-  resend = new Resend(process.env.RESEND_API_KEY);
-} else {
-  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.warn('⚠️ ADVERTENCIA: Faltan variables de entorno para Nodemailer (EMAIL_HOST, EMAIL_USER, EMAIL_PASS). El envío de correos fallará.');
-  }
 
-  transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: parseInt(process.env.EMAIL_PORT || 587),
-    secure: process.env.EMAIL_SECURE === 'true',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-}
 
 // Función helper para generar código de 6 dígitos
 const generarCodigo6Digitos = () => {
@@ -333,30 +313,37 @@ const solicitarResetPassword = async (req, res, next) => {
         </div>
       `;
 
-      console.log('📧 Intentando enviar email...');
-      console.log('   - Resend disponible:', !!resend);
-      console.log('   - Transporter disponible:', !!transporter);
-      console.log('   - NODE_ENV:', process.env.NODE_ENV);
-
-      if (resend) {
-        console.log('📨 Enviando con Resend...');
-        const resendResult = await resend.emails.send({
-          from: fromEmail,
-          to: email,
-          subject,
-          text,
-          html,
-        });
-        console.log('✅ Resend result:', resendResult);
-      } else if (transporter) {
-        console.log('📨 Enviando con Nodemailer/Ethereal...');
-        const info = await transporter.sendMail({ from: fromEmail, to: email, subject, text, html });
-        console.log('✅ Nodemailer result:', info);
-        if (process.env.EMAIL_HOST === 'smtp.ethereal.email') {
-          console.log('📭 Preview URL:', nodemailer.getTestMessageUrl(info));
-        }
+      console.log('📧 Intentando enviar email vía Brevo HTTP API...');
+      const brevoApiKey = process.env.BREVO_API_KEY;
+      
+      if (!brevoApiKey) {
+        console.warn('⚠️ ADVERTENCIA: Falta BREVO_API_KEY en .env. El correo no se enviará.');
       } else {
-        console.log('⚠️ No hay método de envío disponible!');
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': brevoApiKey,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: {
+              name: process.env.EMAIL_FROM_NAME || 'LavaYa',
+              email: fromEmail
+            },
+            to: [{ email: email }],
+            subject: subject,
+            htmlContent: html
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.text();
+          throw new Error(`Error de Brevo: ${response.status} - ${errorData}`);
+        }
+        
+        const data = await response.json();
+        console.log('✅ Brevo result:', data);
       }
       
       console.log('✅ Código de reset para', email, ':', codigoReset);
