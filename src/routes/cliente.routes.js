@@ -66,4 +66,15 @@ router.post('/pedidos/:id/calificar', calificarRules, validate, calificarPedido)
 router.get('/puntos',          obtenerPuntos);
 router.post('/puntos/canjear', canjear);
 
+// ─── Membresías ──────────────────────────────────────────────
+router.get('/membresias', async (req, res, next) => {
+  try {
+    const membresias = await prisma.membresia.findMany({
+      where: { usuarioId: req.user.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(membresias);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
