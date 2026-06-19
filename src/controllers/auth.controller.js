@@ -177,7 +177,7 @@ const me = async (req, res, next) => {
   }
 };
 
-// ─── Login con Google ─────────────────────────────────────────
+// ─── Login/Registro con Google ─────────────────────────────────────────
 const loginGoogle = async (req, res, next) => {
   try {
     const { idToken } = req.body;
@@ -191,26 +191,40 @@ const loginGoogle = async (req, res, next) => {
     if (!payload) {
       return res.status(401).json({ error: 'Token de Google inválido' });
     }
-    const { sub: googleId, email, name, picture } = payload;
+    const { sub: googleId, email, name, picture, email_verified } = payload;
     const [nombre, ...apellidoParts] = name?.split(' ') || ['Usuario', 'Nuevo'];
     const apellido = apellidoParts.join(' ') || 'Sin Apellido';
 
-    // Buscar usuario por email (SÓLO PERMITIR INGRESAR SI EL EMAIL YA EXISTE)
+    // Buscar usuario por email
     let usuario = await prisma.usuario.findUnique({
       where: { email },
     });
 
     if (!usuario) {
-      return res.status(403).json({ error: 'El email no está registrado. Por favor, registra tu cuenta primero.' });
-    }
-
-    // Si el usuario existe pero no tiene googleId, lo actualizamos
-    if (!usuario.googleId) {
+      // El usuario no existe, lo CREAMOS (registro con Google)
+      usuario = await prisma.usuario.create({
+        data: {
+          id: uuidv4(),
+          nombre,
+          apellido,
+          email,
+          passwordHash: null, // No hay password porque es Google
+          googleId,
+          emailVerificado: email_verified || true,
+          fotoPerfil: picture,
+          rol: 'CLIENTE', // Por defecto rol cliente
+          puntos: {
+            create: { saldo: 0, totalGanados: 0, totalCanjeados: 0 },
+          },
+        },
+      });
+    } else if (!usuario.googleId) {
+      // El usuario existe pero no tiene googleId, lo actualizamos
       usuario = await prisma.usuario.update({
         where: { id: usuario.id },
         data: {
           googleId,
-          emailVerificado: true,
+          emailVerificado: email_verified || true,
           fotoPerfil: picture || usuario.fotoPerfil,
         },
       });
