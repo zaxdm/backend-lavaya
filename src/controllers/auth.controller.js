@@ -16,13 +16,17 @@ let resend;
 if (process.env.NODE_ENV === 'production' && process.env.RESEND_API_KEY) {
   resend = new Resend(process.env.RESEND_API_KEY);
 } else {
+  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn('⚠️ ADVERTENCIA: Faltan variables de entorno para Nodemailer (EMAIL_HOST, EMAIL_USER, EMAIL_PASS). El envío de correos fallará.');
+  }
+
   transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'stebandioses@gmail.com',
+    host: process.env.EMAIL_HOST,
     port: parseInt(process.env.EMAIL_PORT || 587),
     secure: process.env.EMAIL_SECURE === 'true',
     auth: {
-      user: process.env.EMAIL_USER || 'stebandioses@gmail.com',
-      pass: process.env.EMAIL_PASS || 'aL655TEC9030',
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
     },
   });
 }
