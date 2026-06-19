@@ -10,6 +10,69 @@ const router = Router();
 router.use(authenticate);
 router.use(authorize('EMPLEADO', 'ADMIN'));
 
+// ─── MEMBRESÍAS ───────────────────────────────────────────────
+router.get('/membresias', async (req, res, next) => {
+  try {
+    const membresias = await prisma.membresia.findMany({
+      include: { usuario: { select: { id: true, nombre: true, apellido: true, email: true, telefono: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(membresias);
+  } catch (err) { next(err); }
+});
+
+router.get('/membresias/:usuarioId', async (req, res, next) => {
+  try {
+    const membresias = await prisma.membresia.findMany({
+      where: { usuarioId: req.params.usuarioId },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(membresias);
+  } catch (err) { next(err); }
+});
+
+router.post('/membresias/:usuarioId/activar', async (req, res, next) => {
+  try {
+    const { tipo } = req.body;
+    const tipoValidado = tipo || 'PREMIUM';
+    
+    // Calculate fechaFin (1 month from now)
+    const fechaFin = new Date();
+    fechaFin.setMonth(fechaFin.getMonth() + 1);
+    
+    // Set plan details
+    const planes = {
+      BASICO: { precio: 0, descuento: 0, pedidosGratis: 0 },
+      PREMIUM: { precio: 149, descuento: 10, pedidosGratis: 3 },
+      EMPRESARIAL: { precio: 499, descuento: 20, pedidosGratis: 9999 },
+    };
+    const plan = planes[tipoValidado] || planes.PREMIUM;
+
+    // First, deactivate any existing active memberships for this user
+    await prisma.membresia.updateMany({
+      where: { usuarioId: req.params.usuarioId, estado: 'ACTIVA' },
+      data: { estado: 'EXPIRADA' },
+    });
+    
+    // Create new membership
+    const nuevaMembresia = await prisma.membresia.create({
+      data: {
+        id: uuidv4(),
+        usuarioId: req.params.usuarioId,
+        tipo: tipoValidado,
+        estado: 'ACTIVA',
+        fechaInicio: new Date(),
+        fechaFin,
+        precio: plan.precio,
+        descuento: plan.descuento,
+        pedidosGratis: plan.pedidosGratis,
+      },
+    });
+    
+    res.status(201).json({ mensaje: 'Membresía activada correctamente', membresia: nuevaMembresia });
+  } catch (err) { next(err); }
+});
+
 // ─── Ver pedidos en lavandería ────────────────────────────────
 router.get('/pedidos/en-proceso', async (req, res, next) => {
   try {
@@ -475,6 +538,20 @@ router.post('/pedidos', async (req, res, next) => {
     if (tienePrendasExtra) {
       for (const p of prendasData) {
         p.precio = p.precio + p.precioExtra;
+      }
+    }
+
+    // Aplicar descuento por membresía activa (si clienteId existe)
+    let descuentoMembresia = 0;
+    if (clienteId) {
+      const membresia = await prisma.membresia.findFirst({
+        where: { usuarioId: clienteId, estado: 'ACTIVA' },
+      });
+      if (membresia && membresia.descuento > 0) {
+        descuentoMembresia = membresia.descuento;
+        for (const p of prendasData) {
+          p.precio = p.precio * (1 - descuentoMembresia / 100);
+        }
       }
     }
 
