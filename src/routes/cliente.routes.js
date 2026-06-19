@@ -16,6 +16,7 @@ const {
   agregarDireccion,
   actualizarDireccion,
   eliminarDireccion,
+  eliminarCuenta,
   historialPedidos,
   obtenerPuntos,
   canjear,
@@ -49,6 +50,7 @@ router.get('/catalogo', async (req, res, next) => {
 router.get('/perfil',    obtenerPerfil);
 router.patch('/perfil',  actualizarPerfilRules, validate, actualizarPerfil);
 router.patch('/password', cambiarPassword);
+router.delete('/cuenta', eliminarCuenta);
 
 // ─── Direcciones ─────────────────────────────────────────────
 router.get('/direcciones',       listarDirecciones);

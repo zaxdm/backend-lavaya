@@ -234,6 +234,63 @@ const eliminarDireccion = async (req, res, next) => {
 
 // ─── Historial de pedidos ─────────────────────────────────────
 // GET /api/clientes/pedidos
+const eliminarCuenta = async (req, res, next) => {
+  try {
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, rol: true, activo: true },
+    });
+
+    if (!usuario) return res.status(404).json({ error: 'Cliente no encontrado' });
+    if (usuario.rol !== 'CLIENTE') {
+      return res.status(403).json({ error: 'Solo los clientes pueden eliminar su cuenta desde este flujo' });
+    }
+
+    const pedidoPendiente = await prisma.pedido.findFirst({
+      where: {
+        clienteId: req.user.id,
+        estado: { notIn: ['ENTREGADO', 'CANCELADO'] },
+      },
+      select: { id: true, estado: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (pedidoPendiente) {
+      return res.status(409).json({
+        error: 'No puedes eliminar tu cuenta mientras tengas pedidos pendientes o activos',
+        pedidoId: pedidoPendiente.id,
+        estado: pedidoPendiente.estado,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.refreshToken.deleteMany({ where: { usuarioId: req.user.id } });
+
+      await tx.usuario.update({
+        where: { id: req.user.id },
+        data: {
+          activo: false,
+          nombre: 'Cuenta',
+          apellido: 'eliminada',
+          email: `deleted-${req.user.id}@lavaya.local`,
+          telefono: null,
+          passwordHash: null,
+          fotoPerfil: null,
+          googleId: null,
+          googleToken: null,
+          tokenVerificacion: null,
+          tokenReset: null,
+          tokenResetExpira: null,
+        },
+      });
+    });
+
+    res.json({ mensaje: 'Cuenta eliminada correctamente' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const historialPedidos = async (req, res, next) => {
   try {
     const { estado, page = 1, limit = 10 } = req.query;
@@ -398,6 +455,7 @@ module.exports = {
   agregarDireccion,
   actualizarDireccion,
   eliminarDireccion,
+  eliminarCuenta,
   historialPedidos,
   obtenerPuntos,
   canjear,
