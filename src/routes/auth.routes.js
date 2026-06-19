@@ -1,6 +1,6 @@
 // src/routes/auth.routes.js
 const { Router } = require('express');
-const { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword } = require('../controllers/auth.controller');
+const { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword, verificarEmail, reenviarCodigoVerificacion } = require('../controllers/auth.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 
 const router = Router();
@@ -14,5 +14,8 @@ router.get('/me',        authenticate, me);
 router.post('/password/reset-request', solicitarResetPassword);
 router.post('/password/verify-code', verificarCodigoReset);
 router.post('/password/reset', resetPassword);
+
+router.post('/verificar-email', verificarEmail);
+router.post('/reenviar-codigo', reenviarCodigoVerificacion);
 
 module.exports = router;

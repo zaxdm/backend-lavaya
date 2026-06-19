@@ -16,6 +16,39 @@ const generarCodigo6Digitos = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const enviarEmailBrevo = async (toEmail, toName, subject, htmlContent) => {
+  const brevoApiKey = process.env.BREVO_API_KEY;
+  if (!brevoApiKey) {
+    console.warn('⚠️ ADVERTENCIA: Falta BREVO_API_KEY en .env. El correo no se enviará.');
+    return;
+  }
+  const fromEmail = process.env.EMAIL_FROM || 'no-reply@lavaya.com';
+  const fromName = process.env.EMAIL_FROM_NAME || 'LavaYa';
+  
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'api-key': brevoApiKey,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      sender: { name: fromName, email: fromEmail },
+      to: [{ email: toEmail, name: toName }],
+      subject: subject,
+      htmlContent: htmlContent
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Error de Brevo: ${response.status} - ${errorData}`);
+  }
+  
+  return await response.json();
+};
+
+
 // ─── Registro ────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
@@ -30,6 +63,8 @@ const register = async (req, res, next) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    const codigoVerificacion = generarCodigo6Digitos();
+    const expiracionVerificacion = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
 
     const usuario = await prisma.usuario.create({
       data: {
@@ -40,6 +75,9 @@ const register = async (req, res, next) => {
         passwordHash,
         telefono,
         rol: rolPermitido,
+        emailVerificado: false,
+        tokenVerificacion: codigoVerificacion,
+        tokenVerificacionExpira: expiracionVerificacion,
         puntos: {
           create: { saldo: 0, totalGanados: 0, totalCanjeados: 0 },
         },
@@ -56,19 +94,30 @@ const register = async (req, res, next) => {
       });
     }
 
-    const accessToken = generateAccessToken({ id: usuario.id, email: usuario.email, rol: usuario.rol });
-    const refreshToken = generateRefreshToken({ id: usuario.id });
+    // Enviar email de verificación
+    try {
+      const subject = 'Verifica tu cuenta - LavaYa';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C3AED;">Verificación de Cuenta - LavaYa</h2>
+          <p>Hola ${usuario.nombre},</p>
+          <p>Gracias por registrarte. Para activar tu cuenta, ingresa el siguiente código:</p>
+          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
+            ${codigoVerificacion}
+          </div>
+          <p>Este código expira en 15 minutos.</p>
+        </div>
+      `;
+      await enviarEmailBrevo(email, `${usuario.nombre} ${usuario.apellido}`, subject, html);
+      console.log('✅ Email de verificación enviado a:', email);
+    } catch (emailError) {
+      console.error('❌ Error enviando email de verificación:', emailError);
+    }
 
-    await prisma.refreshToken.create({
-      data: {
-        id: uuidv4(),
-        token: refreshToken,
-        usuarioId: usuario.id,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
+    res.status(201).json({ 
+      mensaje: 'Usuario registrado. Por favor verifica tu email.',
+      requiereVerificacion: true 
     });
-
-    res.status(201).json({ usuario, accessToken, refreshToken });
   } catch (err) {
     next(err);
   }
@@ -85,6 +134,10 @@ const login = async (req, res, next) => {
     console.log('User found:', usuario ? usuario.id : 'NOT FOUND');
     if (!usuario || !usuario.activo) {
       return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    if (!usuario.emailVerificado) {
+      return res.status(403).json({ error: 'EMAIL_NOT_VERIFIED', message: 'El correo electrónico no ha sido verificado.' });
     }
 
     console.log('Comparing password...');
@@ -415,4 +468,117 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword };
+// ─── Verificar Email ───────────────────────────────────────────────────────────
+const verificarEmail = async (req, res, next) => {
+  try {
+    const { email, codigo } = req.body;
+    if (!email || !codigo) {
+      return res.status(400).json({ error: 'Se requieren email y código' });
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    if (!usuario) {
+      return res.status(400).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (usuario.emailVerificado) {
+      return res.status(400).json({ error: 'El email ya ha sido verificado' });
+    }
+
+    if (usuario.tokenVerificacion !== codigo || !usuario.tokenVerificacionExpira || usuario.tokenVerificacionExpira < new Date()) {
+      return res.status(400).json({ error: 'Código inválido o expirado' });
+    }
+
+    // Actualizar usuario a verificado y limpiar tokens
+    const usuarioActualizado = await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        tokenVerificacion: null,
+        tokenVerificacionExpira: null,
+      },
+    });
+
+    // Generar tokens de sesión
+    const accessToken = generateAccessToken({ id: usuario.id, email: usuario.email, rol: usuario.rol });
+    const refreshToken = generateRefreshToken({ id: usuario.id });
+
+    await prisma.refreshToken.create({
+      data: {
+        id: uuidv4(),
+        token: refreshToken,
+        usuarioId: usuario.id,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    res.json({
+      mensaje: 'Email verificado correctamente',
+      usuario: {
+        id: usuarioActualizado.id,
+        nombre: usuarioActualizado.nombre,
+        apellido: usuarioActualizado.apellido,
+        email: usuarioActualizado.email,
+        rol: usuarioActualizado.rol,
+      },
+      accessToken,
+      refreshToken,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Reenviar Código de Verificación ───────────────────────────────────────────
+const reenviarCodigoVerificacion = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Se requiere el email' });
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    if (!usuario) {
+      return res.status(400).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (usuario.emailVerificado) {
+      return res.status(400).json({ error: 'El email ya ha sido verificado' });
+    }
+
+    const codigoVerificacion = generarCodigo6Digitos();
+    const expiracionVerificacion = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        tokenVerificacion: codigoVerificacion,
+        tokenVerificacionExpira: expiracionVerificacion,
+      },
+    });
+
+    try {
+      const subject = 'Nuevo código de verificación - LavaYa';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C3AED;">Verificación de Cuenta - LavaYa</h2>
+          <p>Hola ${usuario.nombre},</p>
+          <p>Has solicitado un nuevo código de verificación. Ingresa el siguiente código:</p>
+          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
+            ${codigoVerificacion}
+          </div>
+          <p>Este código expira en 15 minutos.</p>
+        </div>
+      `;
+      await enviarEmailBrevo(email, `${usuario.nombre} ${usuario.apellido}`, subject, html);
+    } catch (emailError) {
+      console.error('❌ Error enviando email de verificación:', emailError);
+    }
+
+    res.json({ mensaje: 'Nuevo código enviado correctamente' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword, verificarEmail, reenviarCodigoVerificacion };

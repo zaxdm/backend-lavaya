@@ -19,6 +19,7 @@ model Usuario {
   activo             Boolean        @default(true)
   emailVerificado    Boolean        @default(false)
   tokenVerificacion  String?
+  tokenVerificacionExpira DateTime?
   tokenReset         String?
   tokenResetExpira   DateTime?
   fotoPerfil         String?
