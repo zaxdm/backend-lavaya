@@ -2,11 +2,28 @@
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { OAuth2Client } = require('google-auth-library');
+const nodemailer = require('nodemailer');
 const prisma = require('../config/prisma');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+// Configurar nodemailer
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
+  port: parseInt(process.env.EMAIL_PORT || 587),
+  secure: process.env.EMAIL_SECURE === 'true',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Función helper para generar código de 6 dígitos
+const generarCodigo6Digitos = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
 
 // ─── Registro ────────────────────────────────────────────────
 const register = async (req, res, next) => {
@@ -271,24 +288,69 @@ const solicitarResetPassword = async (req, res, next) => {
     const usuario = await prisma.usuario.findUnique({ where: { email } });
     if (!usuario) {
       // Por seguridad, respondemos lo mismo que si existiera para no revelar emails
-      return res.json({ mensaje: 'Si el email existe, se ha enviado un enlace de recuperación' });
+      return res.json({ mensaje: 'Si el email existe, se ha enviado un código de recuperación' });
     }
 
-    // Generar token único y fecha de expiración (1 hora)
-    const tokenReset = uuidv4();
-    const tokenResetExpira = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+    // Generar código de 6 dígitos y fecha de expiración (10 minutos)
+    const codigoReset = generarCodigo6Digitos();
+    const tokenResetExpira = new Date(Date.now() + 10 * 60 * 1000); // 10 minutos
 
     await prisma.usuario.update({
       where: { id: usuario.id },
-      data: { tokenReset, tokenResetExpira },
+      data: { tokenReset: codigoReset, tokenResetExpira },
     });
 
-    // TODO: Aquí deberías enviar el email con el enlace (usar nodemailer o similar)
-    // Por ahora, devolvemos el token en la respuesta para pruebas (NO HACER ESTO EN PRODUCCIÓN!)
-    // En producción, envía un email con un enlace como: https://tuapp.com/reset-password?token={tokenReset}
-    console.log('Token de reset generado para', email, ':', tokenReset);
+    // Enviar email con el código
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_FROM || 'no-reply@lavaya.com',
+        to: email,
+        subject: 'Código de recuperación de contraseña - LavaYa',
+        text: `Tu código de recuperación es: ${codigoReset}\nEste código expira en 10 minutos.`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C3AED;">Recuperación de Contraseña - LavaYa</h2>
+            <p>Hola ${usuario.nombre},</p>
+            <p>Tu código de recuperación es:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
+              ${codigoReset}
+            </div>
+            <p>Este código expira en 10 minutos.</p>
+            <p>Si no solicitaste esto, ignora este correo.</p>
+            <p style="margin-top: 30px; color: #999; font-size: 12px;">
+              Saludos,<br>
+              El equipo de LavaYa
+            </p>
+          </div>
+        `,
+      });
+      console.log('Código de reset enviado a', email, ':', codigoReset);
+    } catch (emailError) {
+      console.error('Error al enviar email:', emailError);
+      // Si falla el email, por ahora seguimos y mostramos el código en consola (solo para desarrollo)
+      console.log('Código de reset generado para', email, ':', codigoReset);
+    }
 
-    res.json({ mensaje: 'Si el email existe, se ha enviado un enlace de recuperación', tokenReset }); // Eliminar tokenReset en producción
+    res.json({ mensaje: 'Si el email existe, se ha enviado un código de recuperación' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Verificar Código de Reset ───────────────────────────────────────────
+const verificarCodigoReset = async (req, res, next) => {
+  try {
+    const { email, codigo } = req.body;
+    if (!email || !codigo) {
+      return res.status(400).json({ error: 'Se requieren email y código' });
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    if (!usuario || usuario.tokenReset !== codigo || !usuario.tokenResetExpira || usuario.tokenResetExpira < new Date()) {
+      return res.status(400).json({ error: 'Código inválido o expirado' });
+    }
+
+    res.json({ mensaje: 'Código verificado correctamente' });
   } catch (err) {
     next(err);
   }
@@ -297,20 +359,17 @@ const solicitarResetPassword = async (req, res, next) => {
 // ─── Resetear Contraseña ───────────────────────────────────────────────────
 const resetPassword = async (req, res, next) => {
   try {
-    const { token, nuevaPassword } = req.body;
-    if (!token || !nuevaPassword) {
-      return res.status(400).json({ error: 'Se requieren token y nueva contraseña' });
+    const { email, codigo, nuevaPassword } = req.body;
+    if (!email || !codigo || !nuevaPassword) {
+      return res.status(400).json({ error: 'Se requieren email, código y nueva contraseña' });
     }
     if (nuevaPassword.length < 8) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
     }
 
-    const usuario = await prisma.usuario.findUnique({
-      where: { tokenReset: token },
-    });
-
-    if (!usuario || !usuario.tokenResetExpira || usuario.tokenResetExpira < new Date()) {
-      return res.status(400).json({ error: 'Token inválido o expirado' });
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    if (!usuario || usuario.tokenReset !== codigo || !usuario.tokenResetExpira || usuario.tokenResetExpira < new Date()) {
+      return res.status(400).json({ error: 'Código inválido o expirado' });
     }
 
     // Hash de la nueva contraseña
@@ -333,4 +392,4 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, resetPassword };
+module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword };
