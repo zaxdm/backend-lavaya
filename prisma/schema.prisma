@@ -14,7 +14,7 @@ model Usuario {
   apellido           String
   email              String         @unique
   telefono           String?
-  passwordHash       String
+  passwordHash       String?
   rol                Rol            @default(CLIENTE)
   activo             Boolean        @default(true)
   emailVerificado    Boolean        @default(false)
@@ -22,6 +22,8 @@ model Usuario {
   tokenReset         String?
   tokenResetExpira   DateTime?
   fotoPerfil         String?
+  googleId           String?        @unique
+  googleToken        String?
   empresaB2BId       String?
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt

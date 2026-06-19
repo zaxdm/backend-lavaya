@@ -20,7 +20,10 @@ const reportesRoutes = require('./routes/reportes.routes');
 const app = express();
 
 // ─── Seguridad ─────────────────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
 // ─── CORS ──────────────────────────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
