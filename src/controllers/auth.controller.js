@@ -329,23 +329,38 @@ const solicitarResetPassword = async (req, res, next) => {
         </div>
       `;
 
+      console.log('📧 Intentando enviar email...');
+      console.log('   - Resend disponible:', !!resend);
+      console.log('   - Transporter disponible:', !!transporter);
+      console.log('   - NODE_ENV:', process.env.NODE_ENV);
+
       if (resend) {
-        await resend.emails.send({
+        console.log('📨 Enviando con Resend...');
+        const resendResult = await resend.emails.send({
           from: fromEmail,
           to: email,
           subject,
           text,
           html,
         });
+        console.log('✅ Resend result:', resendResult);
       } else if (transporter) {
-        await transporter.sendMail({ from: fromEmail, to: email, subject, text, html });
+        console.log('📨 Enviando con Nodemailer/Ethereal...');
+        const info = await transporter.sendMail({ from: fromEmail, to: email, subject, text, html });
+        console.log('✅ Nodemailer result:', info);
+        if (process.env.EMAIL_HOST === 'smtp.ethereal.email') {
+          console.log('📭 Preview URL:', nodemailer.getTestMessageUrl(info));
+        }
+      } else {
+        console.log('⚠️ No hay método de envío disponible!');
       }
       
-      console.log('Código de reset enviado a', email, ':', codigoReset);
+      console.log('✅ Código de reset para', email, ':', codigoReset);
     } catch (emailError) {
-      console.error('Error al enviar email:', emailError);
+      console.error('❌ Error al enviar email:', emailError);
+      console.error('   - Error details:', JSON.stringify(emailError, null, 2));
       // Si falla el email, por ahora seguimos y mostramos el código en consola (solo para desarrollo)
-      console.log('Código de reset generado para', email, ':', codigoReset);
+      console.log('🔢 Código de reset generado para', email, ':', codigoReset);
     }
 
     res.json({ mensaje: 'Si el email existe, se ha enviado un código de recuperación' });
