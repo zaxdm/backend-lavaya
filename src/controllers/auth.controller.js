@@ -260,4 +260,77 @@ const loginGoogle = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, loginGoogle, refresh, logout, me };
+// ─── Solicitar Reset de Contraseña ───────────────────────────────────────────
+const solicitarResetPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Se requiere el email' });
+    }
+
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    if (!usuario) {
+      // Por seguridad, respondemos lo mismo que si existiera para no revelar emails
+      return res.json({ mensaje: 'Si el email existe, se ha enviado un enlace de recuperación' });
+    }
+
+    // Generar token único y fecha de expiración (1 hora)
+    const tokenReset = uuidv4();
+    const tokenResetExpira = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: { tokenReset, tokenResetExpira },
+    });
+
+    // TODO: Aquí deberías enviar el email con el enlace (usar nodemailer o similar)
+    // Por ahora, devolvemos el token en la respuesta para pruebas (NO HACER ESTO EN PRODUCCIÓN!)
+    // En producción, envía un email con un enlace como: https://tuapp.com/reset-password?token={tokenReset}
+    console.log('Token de reset generado para', email, ':', tokenReset);
+
+    res.json({ mensaje: 'Si el email existe, se ha enviado un enlace de recuperación', tokenReset }); // Eliminar tokenReset en producción
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Resetear Contraseña ───────────────────────────────────────────────────
+const resetPassword = async (req, res, next) => {
+  try {
+    const { token, nuevaPassword } = req.body;
+    if (!token || !nuevaPassword) {
+      return res.status(400).json({ error: 'Se requieren token y nueva contraseña' });
+    }
+    if (nuevaPassword.length < 8) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    }
+
+    const usuario = await prisma.usuario.findUnique({
+      where: { tokenReset: token },
+    });
+
+    if (!usuario || !usuario.tokenResetExpira || usuario.tokenResetExpira < new Date()) {
+      return res.status(400).json({ error: 'Token inválido o expirado' });
+    }
+
+    // Hash de la nueva contraseña
+    const passwordHash = await bcrypt.hash(nuevaPassword, 12);
+
+    // Actualizar contraseña y limpiar tokens de reset
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        passwordHash,
+        tokenReset: null,
+        tokenResetExpira: null,
+        refreshTokens: { deleteMany: {} }, // Cerrar todas las sesiones
+      },
+    });
+
+    res.json({ mensaje: 'Contraseña actualizada correctamente' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, resetPassword };
