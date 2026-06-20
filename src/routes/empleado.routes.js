@@ -670,23 +670,23 @@ router.post('/pedidos', async (req, res, next) => {
 router.get('/clientes', async (req, res, next) => {
   try {
     const { q } = req.query;
-    if (!q || String(q).trim().length < 2) {
-      return res.json([]);
+    let where = { rol: 'CLIENTE', activo: true };
+    
+    if (q && String(q).trim().length >= 2) {
+      const buscar = String(q).trim();
+      where.OR = [
+        { nombre:   { contains: buscar } },
+        { apellido: { contains: buscar } },
+        { email:    { contains: buscar } },
+        { telefono: { contains: buscar } },
+      ];
     }
-    const buscar = String(q).trim();
+    
     const clientes = await prisma.usuario.findMany({
-      where: {
-        rol: 'CLIENTE',
-        activo: true,
-        OR: [
-          { nombre:   { contains: buscar } },
-          { apellido: { contains: buscar } },
-          { email:    { contains: buscar } },
-          { telefono: { contains: buscar } },
-        ],
-      },
+      where,
       select: { id: true, nombre: true, apellido: true, email: true, telefono: true },
-      take: 8,
+      orderBy: { nombre: 'asc' },
+      take: 50,
     });
     res.json(clientes);
   } catch (err) { next(err); }
