@@ -228,9 +228,7 @@ const cambiarEstadoPedido = async (req, res, next) => {
       });
     }
 
-    // ── 1. Actualizar pedido + historial (queries separadas, sin transacción) ──
-    // Usar $transaction interactivo con DB remota provoca timeout. Las queries
-    // secuenciales con prisma directo son más resilientes.
+    // ── 1. Actualizar pedido + historial ──
     const pedidoActualizado = await prisma.pedido.update({
       where: { id: req.params.id },
       data: {
@@ -255,9 +253,50 @@ const cambiarEstadoPedido = async (req, res, next) => {
       },
     });
 
-    // ── 3. Efectos al entregar ──
+    // ── 3. Puntos al repartidor por acción ───────────────────────
+    // RECOLECTADO (+5 puntos): recogió las prendas en casa del cliente
+    // ENTREGADO   (+10 puntos): entregó las prendas en casa del cliente
+    const puntosGanados = nuevoEstado === 'RECOLECTADO' ? 5
+                        : nuevoEstado === 'ENTREGADO'   ? 10
+                        : 0;
+
+    if (puntosGanados > 0) {
+      try {
+        // Asegurar que el repartidor tiene registro de Puntos
+        const puntosRecord = await prisma.puntos.upsert({
+          where:  { usuarioId: repartidor.usuarioId },
+          update: {
+            saldo:        { increment: puntosGanados },
+            totalGanados: { increment: puntosGanados },
+          },
+          create: {
+            id:            uuidv4(),
+            usuarioId:     repartidor.usuarioId,
+            saldo:         puntosGanados,
+            totalGanados:  puntosGanados,
+            totalCanjeados: 0,
+          },
+        });
+
+        await prisma.movimientoPuntos.create({
+          data: {
+            id:       uuidv4(),
+            puntosId: puntosRecord.id,
+            cantidad: puntosGanados,
+            concepto: nuevoEstado === 'RECOLECTADO'
+              ? `Recolección del pedido #${req.params.id.slice(0, 8)}`
+              : `Entrega del pedido #${req.params.id.slice(0, 8)}`,
+            pedidoId: req.params.id,
+          },
+        });
+      } catch (pErr) {
+        console.error('⚠️ Error otorgando puntos al repartidor:', pErr.message);
+        // No bloquear la respuesta por un error en puntos
+      }
+    }
+
+    // ── 4. Efectos al entregar ──
     if (nuevoEstado === 'ENTREGADO') {
-      // Contar pedidos activos restantes
       const pedidosActivos = await prisma.pedido.count({
         where: {
           OR: [
@@ -269,7 +308,6 @@ const cambiarEstadoPedido = async (req, res, next) => {
         },
       });
 
-      // Actualizar estado + conteo del repartidor
       await prisma.repartidor.update({
         where: { id: repartidor.id },
         data: {
@@ -278,11 +316,7 @@ const cambiarEstadoPedido = async (req, res, next) => {
         },
       });
 
-      // Marcar pago efectivo como completado
-      if (
-        pedido.pago?.metodoPago === 'EFECTIVO' &&
-        pedido.pago?.estado === 'PENDIENTE'
-      ) {
+      if (pedido.pago?.metodoPago === 'EFECTIVO' && pedido.pago?.estado === 'PENDIENTE') {
         await prisma.pago.update({
           where: { pedidoId: req.params.id },
           data: { estado: 'COMPLETADO', recolectadoPor: req.user.id },
