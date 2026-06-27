@@ -29,8 +29,12 @@ const listarUsuarios = async (req, res, next) => {
         select: {
           id: true, nombre: true, apellido: true, email: true,
           telefono: true, rol: true, activo: true, createdAt: true,
-          puntos:      { select: { saldo: true } },
-          repartidor:  { select: { estado: true, calificacionPromedio: true, totalServicios: true } },
+          puntos:     { select: { saldo: true } },
+          repartidor: { select: { estado: true, calificacionPromedio: true, totalServicios: true } },
+          membresias: {
+            select:  { id: true, tipo: true, estado: true, descuento: true, pedidosGratis: true, fechaInicio: true, fechaFin: true, createdAt: true },
+            orderBy: { createdAt: 'desc' },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip,
