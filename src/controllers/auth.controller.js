@@ -52,7 +52,7 @@ const enviarEmailBrevo = async (toEmail, toName, subject, htmlContent) => {
 // ─── Registro ────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
-    const { nombre, apellido, email, password, telefono, rol } = req.body;
+    const { nombre, apellido, email, password, telefono, rol, emailPreVerificado } = req.body;
 
     // Rol permitido al registrarse públicamente
     const rolPermitido = ['CLIENTE', 'REPARTIDOR'].includes(rol) ? rol : 'CLIENTE';
@@ -62,9 +62,19 @@ const register = async (req, res, next) => {
       return res.status(409).json({ error: 'El email ya está registrado' });
     }
 
+    // Si el cliente ya verificó el email pre-registro, validar el cache
+    let yaVerificado = false;
+    if (emailPreVerificado === true) {
+      const entrada = _preVerifCache.get(email.toLowerCase());
+      if (entrada && entrada.verificado && entrada.expira > Date.now()) {
+        yaVerificado = true;
+        _preVerifCache.delete(email.toLowerCase()); // limpiar tras usar
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
-    const codigoVerificacion = generarCodigo6Digitos();
-    const expiracionVerificacion = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
+    const codigoVerificacion = yaVerificado ? null : generarCodigo6Digitos();
+    const expiracionVerificacion = yaVerificado ? null : new Date(Date.now() + 15 * 60 * 1000);
 
     const usuario = await prisma.usuario.create({
       data: {
@@ -75,7 +85,7 @@ const register = async (req, res, next) => {
         passwordHash,
         telefono,
         rol: rolPermitido,
-        emailVerificado: false,
+        emailVerificado: yaVerificado,
         tokenVerificacion: codigoVerificacion,
         tokenVerificacionExpira: expiracionVerificacion,
         puntos: {
@@ -94,29 +104,36 @@ const register = async (req, res, next) => {
       });
     }
 
-    // Enviar email de verificación
-    try {
-      const subject = 'Verifica tu cuenta - LavaYa';
-      const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #7C3AED;">Verificación de Cuenta - LavaYa</h2>
-          <p>Hola ${usuario.nombre},</p>
-          <p>Gracias por registrarte. Para activar tu cuenta, ingresa el siguiente código:</p>
-          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #7C3AED; padding: 20px; background: #F3E8FF; border-radius: 10px; text-align: center;">
-            ${codigoVerificacion}
+    // Solo enviar código si el email NO fue pre-verificado
+    if (!yaVerificado) {
+      try {
+        const subject = 'Verifica tu cuenta - LavaYa';
+        const html = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #0ea5e9; margin: 0;">LavaYa</h1>
+              <p style="color: #64748b; margin: 4px 0 0;">Lavandería a domicilio</p>
+            </div>
+            <h2 style="color: #1e293b;">Verifica tu cuenta</h2>
+            <p style="color: #475569;">Hola ${usuario.nombre}, gracias por registrarte. Ingresa el siguiente código para activar tu cuenta:</p>
+            <div style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #0ea5e9; padding: 24px; background: #f0f9ff; border: 2px solid #bae6fd; border-radius: 12px; text-align: center; margin: 24px 0;">
+              ${codigoVerificacion}
+            </div>
+            <p style="color: #94a3b8; font-size: 13px;">Este código expira en <strong>15 minutos</strong>.</p>
           </div>
-          <p>Este código expira en 15 minutos.</p>
-        </div>
-      `;
-      await enviarEmailBrevo(email, `${usuario.nombre} ${usuario.apellido}`, subject, html);
-      console.log('✅ Email de verificación enviado a:', email);
-    } catch (emailError) {
-      console.error('❌ Error enviando email de verificación:', emailError);
+        `;
+        await enviarEmailBrevo(email, `${usuario.nombre} ${usuario.apellido}`, subject, html);
+        console.log('✅ Email de verificación enviado a:', email);
+      } catch (emailError) {
+        console.error('❌ Error enviando email de verificación:', emailError);
+      }
     }
 
-    res.status(201).json({ 
-      mensaje: 'Usuario registrado. Por favor verifica tu email.',
-      requiereVerificacion: true 
+    res.status(201).json({
+      mensaje: yaVerificado
+        ? 'Usuario registrado correctamente'
+        : 'Usuario registrado. Por favor verifica tu email.',
+      requiereVerificacion: !yaVerificado,
     });
   } catch (err) {
     next(err);
@@ -581,4 +598,102 @@ const reenviarCodigoVerificacion = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword, verificarEmail, reenviarCodigoVerificacion };
+// ─── Cache en memoria para verificación pre-registro ─────────
+// { email -> { codigo, expira } }
+const _preVerifCache = new Map();
+
+// Limpiar entradas expiradas cada 5 minutos
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of _preVerifCache.entries()) {
+    if (val.expira < now) _preVerifCache.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+// ─── Enviar código pre-registro (sin crear cuenta) ───────────
+const enviarCodigoVerificacion = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Correo electrónico inválido' });
+    }
+
+    // Verificar que el email no esté ya registrado
+    const existe = await prisma.usuario.findUnique({ where: { email } });
+    if (existe && existe.emailVerificado) {
+      return res.status(409).json({ error: 'Este correo ya tiene una cuenta registrada' });
+    }
+
+    // Respetar cooldown de 45s entre reenvíos
+    const entrada = _preVerifCache.get(email.toLowerCase());
+    if (entrada && entrada.enviadoEn && (Date.now() - entrada.enviadoEn) < 45_000) {
+      const restante = Math.ceil((45_000 - (Date.now() - entrada.enviadoEn)) / 1000);
+      return res.status(429).json({ error: `Espera ${restante} segundos antes de reenviar` });
+    }
+
+    const codigo = generarCodigo6Digitos();
+    _preVerifCache.set(email.toLowerCase(), {
+      codigo,
+      expira: Date.now() + 15 * 60 * 1000, // 15 min
+      enviadoEn: Date.now(),
+    });
+
+    try {
+      const subject = 'Código de verificación - LavaYa';
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h1 style="color: #0ea5e9; margin: 0;">LavaYa</h1>
+            <p style="color: #64748b; margin: 4px 0 0;">Lavandería a domicilio</p>
+          </div>
+          <h2 style="color: #1e293b;">Verifica tu correo electrónico</h2>
+          <p style="color: #475569;">Has solicitado crear una cuenta en LavaYa. Ingresa el siguiente código para verificar tu correo:</p>
+          <div style="font-size: 36px; font-weight: bold; letter-spacing: 12px; color: #0ea5e9; padding: 24px; background: #f0f9ff; border: 2px solid #bae6fd; border-radius: 12px; text-align: center; margin: 24px 0;">
+            ${codigo}
+          </div>
+          <p style="color: #94a3b8; font-size: 13px;">Este código expira en <strong>15 minutos</strong>. Si no solicitaste esto, ignora este correo.</p>
+        </div>
+      `;
+      await enviarEmailBrevo(email, email, subject, html);
+    } catch (emailError) {
+      console.error('❌ Error enviando email pre-verificación:', emailError);
+      _preVerifCache.delete(email.toLowerCase());
+      return res.status(500).json({ error: 'No se pudo enviar el correo. Intenta de nuevo.' });
+    }
+
+    res.json({ mensaje: 'Código enviado al correo' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Verificar código pre-registro ───────────────────────────
+const verificarCodigoPrevio = async (req, res, next) => {
+  try {
+    const { email, codigo } = req.body;
+    if (!email || !codigo) {
+      return res.status(400).json({ error: 'Se requieren email y código' });
+    }
+
+    const entrada = _preVerifCache.get(email.toLowerCase());
+    if (!entrada) {
+      return res.status(400).json({ error: 'No se encontró un código para este correo. Solicita uno nuevo.' });
+    }
+    if (entrada.expira < Date.now()) {
+      _preVerifCache.delete(email.toLowerCase());
+      return res.status(400).json({ error: 'El código expiró. Solicita uno nuevo.' });
+    }
+    if (entrada.codigo !== codigo.toString()) {
+      return res.status(400).json({ error: 'Código incorrecto' });
+    }
+
+    // Marcar como verificado en cache (se usará al registrar)
+    _preVerifCache.set(email.toLowerCase(), { ...entrada, verificado: true });
+
+    res.json({ mensaje: 'Correo verificado correctamente' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, login, loginGoogle, refresh, logout, me, solicitarResetPassword, verificarCodigoReset, resetPassword, verificarEmail, reenviarCodigoVerificacion, enviarCodigoVerificacion, verificarCodigoPrevio };
