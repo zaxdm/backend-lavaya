@@ -91,6 +91,21 @@ const register = async (req, res, next) => {
         puntos: {
           create: { saldo: 0, totalGanados: 0, totalCanjeados: 0 },
         },
+        // Todo cliente comienza con el plan Básico activo (sin costo)
+        ...(rolPermitido === 'CLIENTE' ? {
+          membresias: {
+            create: {
+              id: uuidv4(),
+              tipo: 'BASICO',
+              estado: 'ACTIVA',
+              fechaInicio: new Date(),
+              fechaFin: new Date('2099-12-31'), // indefinida para plan gratuito
+              precio: 0,
+              descuento: 0,
+              pedidosGratis: 0,
+            },
+          },
+        } : {}),
       },
       select: {
         id: true, nombre: true, apellido: true, email: true, rol: true, createdAt: true,

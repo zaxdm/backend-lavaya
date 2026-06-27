@@ -83,7 +83,7 @@ const obtenerUsuario = async (req, res, next) => {
 const crearUsuario = async (req, res, next) => {
   try {
     const { nombre, apellido, email, password, telefono, rol } = req.body;
-    const rolesPermitidos = ['ADMIN', 'EMPLEADO', 'REPARTIDOR'];
+    const rolesPermitidos = ['ADMIN', 'EMPLEADO', 'REPARTIDOR', 'CLIENTE'];
     const rolFinal = rolesPermitidos.includes(rol) ? rol : 'EMPLEADO';
 
     const existe = await prisma.usuario.findUnique({ where: { email } });
@@ -97,6 +97,7 @@ const crearUsuario = async (req, res, next) => {
           id: uuidv4(), nombre, apellido, email, passwordHash,
           telefono: telefono || null,
           rol: rolFinal,
+          emailVerificado: true, // creado por admin = ya verificado
         },
         select: {
           id: true, nombre: true, apellido: true,
@@ -109,6 +110,28 @@ const crearUsuario = async (req, res, next) => {
           data: { id: uuidv4(), usuarioId: nuevoUsuario.id, estado: 'DISPONIBLE' },
         });
       }
+
+      // Clientes comienzan con plan Básico activo
+      if (rolFinal === 'CLIENTE') {
+        await tx.membresia.create({
+          data: {
+            id: uuidv4(),
+            usuarioId: nuevoUsuario.id,
+            tipo: 'BASICO',
+            estado: 'ACTIVA',
+            fechaInicio: new Date(),
+            fechaFin: new Date('2099-12-31'),
+            precio: 0,
+            descuento: 0,
+            pedidosGratis: 0,
+          },
+        });
+      }
+
+      // Crear registro de puntos
+      await tx.puntos.create({
+        data: { id: uuidv4(), usuarioId: nuevoUsuario.id, saldo: 0, totalGanados: 0, totalCanjeados: 0 },
+      }).catch(() => {}); // ignorar si ya existe
 
       return nuevoUsuario;
     });

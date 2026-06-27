@@ -1,5 +1,7 @@
 // src/routes/admin.routes.js
 const { Router } = require('express');
+const { v4: uuidv4 } = require('uuid');
+const prisma = require('../config/prisma');
 const { authenticate, authorize } = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate.middleware');
 const {
@@ -42,6 +44,48 @@ router.get('/usuarios',              listarUsuarios);
 router.get('/usuarios/:id',          obtenerUsuario);
 router.post('/usuarios',             crearUsuarioRules, validate, crearUsuario);
 router.patch('/usuarios/:id/estado', toggleEstadoUsuario);
+
+// ─── Migración: asignar plan BÁSICO a clientes sin membresía ──
+// POST /api/admin/membresias/asignar-basico-masivo
+router.post('/membresias/asignar-basico-masivo', async (req, res, next) => {
+  try {
+    // Encontrar todos los clientes activos sin ninguna membresía
+    const sinMembresia = await prisma.usuario.findMany({
+      where: {
+        rol: 'CLIENTE',
+        activo: true,
+        membresias: { none: {} },
+      },
+      select: { id: true },
+    });
+
+    if (sinMembresia.length === 0) {
+      return res.json({ mensaje: 'Todos los clientes ya tienen membresía', asignados: 0 });
+    }
+
+    const fechaFin = new Date('2099-12-31');
+    const ahora    = new Date();
+
+    await prisma.membresia.createMany({
+      data: sinMembresia.map(u => ({
+        id: uuidv4(),
+        usuarioId: u.id,
+        tipo: 'BASICO',
+        estado: 'ACTIVA',
+        fechaInicio: ahora,
+        fechaFin,
+        precio: 0,
+        descuento: 0,
+        pedidosGratis: 0,
+      })),
+    });
+
+    res.json({
+      mensaje: `Plan Básico asignado a ${sinMembresia.length} cliente(s)`,
+      asignados: sinMembresia.length,
+    });
+  } catch (err) { next(err); }
+});
 
 // ─── Repartidores ─────────────────────────────────────────────
 router.get('/repartidores', listarRepartidores);
