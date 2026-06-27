@@ -20,7 +20,20 @@ router.use(authenticate);
 router.use(authorize('REPARTIDOR', 'ADMIN'));
 
 // ─── Dashboard ────────────────────────────────────────────────
-router.get('/dashboard', dashboard);
+router.get('/dashboard',                     dashboard);
+router.get('/puntos',                        async (req, res, next) => {
+  try {
+    const { v4: uuidv4 } = require('uuid');
+    const prisma = require('../config/prisma');
+    // Upsert para garantizar que el registro exista
+    const puntos = await prisma.puntos.upsert({
+      where:  { usuarioId: req.user.id },
+      update: {},
+      create: { id: uuidv4(), usuarioId: req.user.id, saldo: 0, totalGanados: 0, totalCanjeados: 0 },
+    });
+    res.json({ saldo: puntos.saldo, totalGanados: puntos.totalGanados });
+  } catch (err) { next(err); }
+});
 
 // ─── Disponibilidad ───────────────────────────────────────────
 router.patch('/disponibilidad', cambiarDisponibilidad);
