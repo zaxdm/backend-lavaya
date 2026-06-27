@@ -135,6 +135,19 @@ const misPedidos = async (req, res, next) => {
 
 // ─── Aceptar pedido ───────────────────────────────────────────
 // PATCH /api/repartidores/pedidos/:id/aceptar
+//
+// ⚠️  PROTECCIÓN CONTRA RACE CONDITION
+// El `update` usa un WHERE compuesto que incluye estado = 'PENDIENTE' y
+// repartidorRecoleccionId = null. Si dos repartidores llaman al mismo
+// tiempo, el primero actualiza 1 fila; el segundo actualiza 0 filas
+// (porque ya no se cumple la condición). Prisma lanza P2025 cuando
+// un update no encuentra ningún registro coincidente, lo que convierte
+// la race condition en un error determinístico.
+// Esto es equivalente a:
+//   UPDATE pedidos
+//   SET estado = 'CONFIRMADO', repartidor_id = ?
+//   WHERE id = ? AND estado = 'PENDIENTE' AND repartidor_id IS NULL
+//
 const aceptarPedido = async (req, res, next) => {
   try {
     const repartidor = await getRepartidor(req.user.id);
@@ -143,31 +156,59 @@ const aceptarPedido = async (req, res, next) => {
       return res.status(400).json({ error: 'Tu cuenta de repartidor está inactiva' });
     }
 
-    const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
-    if (pedido.estado !== 'PENDIENTE') {
-      return res.status(400).json({ error: 'El pedido ya no está disponible' });
-    }
-    if (pedido.repartidorRecoleccionId) {
-      return res.status(409).json({ error: 'El pedido ya fue aceptado por otro repartidor' });
-    }
-
-    // ── 1. Asignar repartidor al pedido ──
-    const pedidoActualizado = await prisma.pedido.update({
+    // Verificar que el pedido existe antes de intentar la actualización atómica
+    const pedidoExiste = await prisma.pedido.findUnique({
       where: { id: req.params.id },
-      data: {
-        repartidorRecoleccionId: repartidor.id,
-        estado: 'CONFIRMADO',
-      },
-      include: {
-        prendas: true,
-        pago: true,
-        direccion: true,
-        cliente: { select: { nombre: true, apellido: true, telefono: true } },
-      },
+      select: { id: true, estado: true, repartidorRecoleccionId: true },
     });
+    if (!pedidoExiste) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+    // Pre-check para dar un error más descriptivo si ya está tomado
+    // (el check atómico del UPDATE captura el caso concurrente real)
+    if (pedidoExiste.estado !== 'PENDIENTE') {
+      return res.status(409).json({ error: 'Este pedido ya no está disponible' });
+    }
+    if (pedidoExiste.repartidorRecoleccionId) {
+      return res.status(409).json({ error: 'Este pedido ya fue tomado por otro repartidor' });
+    }
 
-    // ── 2. Crear historial ──
+    // ── UPDATE ATÓMICO: condición en el WHERE del update ──────────
+    // Si entre el check anterior y este update otro repartidor se adelantó,
+    // Prisma lanzará PrismaClientKnownRequestError con code P2025
+    // (record not found), que capturamos abajo.
+    let pedidoActualizado;
+    try {
+      pedidoActualizado = await prisma.pedido.update({
+        where: {
+          id: req.params.id,
+          // Condición atómica: solo actualiza si TODAVÍA está en PENDIENTE
+          // sin repartidor asignado
+          estado: 'PENDIENTE',
+          repartidorRecoleccionId: null,
+        },
+        data: {
+          repartidorRecoleccionId: repartidor.id,
+          estado: 'CONFIRMADO',
+        },
+        include: {
+          prendas: true,
+          pago: true,
+          direccion: true,
+          cliente: { select: { nombre: true, apellido: true, telefono: true } },
+        },
+      });
+    } catch (updateErr) {
+      // P2025 = "Record to update not found" — otro repartidor se adelantó
+      if (updateErr?.code === 'P2025') {
+        return res.status(409).json({
+          error: 'Este pedido acaba de ser tomado por otro repartidor. Intenta con otro pedido.',
+        });
+      }
+      throw updateErr; // cualquier otro error sube al handler global
+    }
+
+    // ── Historial + marcar OCUPADO (no críticos para la atomicidad) ──
     await prisma.historialPedido.create({
       data: {
         id: uuidv4(),
@@ -178,7 +219,6 @@ const aceptarPedido = async (req, res, next) => {
       },
     });
 
-    // ── 3. Marcar repartidor como OCUPADO ──
     await prisma.repartidor.update({
       where: { id: repartidor.id },
       data: { estado: 'OCUPADO' },

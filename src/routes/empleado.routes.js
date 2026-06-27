@@ -192,16 +192,15 @@ router.patch('/pedidos/:id/listo', async (req, res, next) => {
 
 // ─── AVANZAR estado (empleado) ───────────────────────────────
 //  RECOLECTADO → EN_PROCESO  (empleado inicia el lavado)
-//  EN_PROCESO  → LISTO       (empleado termina — notifica a repartidores)
+//  EN_PROCESO  → LISTO       (empleado termina el lavado)
+//
+// Cuando llega a LISTO → TODO: notificación push a repartidores
+// disponibles (pendiente de configuración FCM — ver comentario abajo).
 //
 router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
   try {
     const pedido = await prisma.pedido.findUnique({
       where: { id: req.params.id },
-      include: {
-        cliente: { select: { nombre: true, apellido: true } },
-        prendas: { select: { tipo: true, cantidad: true } },
-      },
     });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
@@ -234,58 +233,18 @@ router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
       },
     });
 
-    // ── Cuando el pedido queda LISTO: notificar por email a repartidores disponibles ──
-    if (estadoFinal === 'LISTO') {
-      try {
-        const repartidoresDisponibles = await prisma.repartidor.findMany({
-          where: { estado: 'DISPONIBLE' },
-          include: { usuario: { select: { email: true, nombre: true } } },
-        });
+    // ── TODO: Notificación push cuando el pedido queda LISTO ─────
+    // FCM no está configurado todavía. Pendiente de:
+    //   1. Crear proyecto Firebase real y obtener Service Account Key
+    //   2. Agregar FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY al .env
+    //   3. Agregar columna fcmToken a Repartidor en prisma/schema.prisma
+    //   4. Implementar registro de token en la app Flutter (firebase_messaging)
+    //   5. Instalar firebase-admin en el backend: npm install firebase-admin
+    // Una vez listo, reemplazar este bloque con:
+    //   await enviarNotificacionPushListo(req.params.id, pedido, mañana);
+    // ─────────────────────────────────────────────────────────────
 
-        const brevoApiKey = process.env.BREVO_API_KEY;
-        const fromEmail   = process.env.EMAIL_FROM   || 'no-reply@lavaya.com';
-        const fromName    = process.env.EMAIL_FROM_NAME || 'LavaYa';
-        const totalPrendas = pedido.prendas.reduce((s, p) => s + p.cantidad, 0);
-        const clienteNombre = `${pedido.cliente?.nombre ?? ''} ${pedido.cliente?.apellido ?? ''}`.trim();
-
-        const emailsPromises = repartidoresDisponibles.map(r =>
-          fetch('https://api.brevo.com/v3/smtp/email', {
-            method: 'POST',
-            headers: { 'accept': 'application/json', 'api-key': brevoApiKey, 'content-type': 'application/json' },
-            body: JSON.stringify({
-              sender: { name: fromName, email: fromEmail },
-              to: [{ email: r.usuario.email, name: r.usuario.nombre }],
-              subject: '🚚 Pedido listo para entrega — LavaYa',
-              htmlContent: `
-                <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px">
-                  <div style="text-align:center;margin-bottom:20px">
-                    <h1 style="color:#0ea5e9;margin:0">LavaYa</h1>
-                    <p style="color:#64748b;margin:4px 0 0">Lavandería a domicilio</p>
-                  </div>
-                  <h2 style="color:#14b8a6">¡Hay un pedido listo para entregar!</h2>
-                  <p>Hola <strong>${r.usuario.nombre}</strong>,</p>
-                  <p>El pedido <strong>#${req.params.id.slice(0, 8).toUpperCase()}</strong> está listo para que lo recojas en la lavandería y lo entregues al cliente.</p>
-                  <div style="background:#f0fdfa;border:1.5px solid #99f6e4;border-radius:10px;padding:16px;margin:16px 0">
-                    <p style="margin:0 0 6px;color:#0f766e;font-weight:700">📦 ${totalPrendas} prendas para ${clienteNombre}</p>
-                    <p style="margin:0;color:#64748b;font-size:13px">Fecha estimada de entrega: ${mañana.toLocaleDateString('es-PE')}</p>
-                  </div>
-                  <p style="color:#64748b;font-size:13px">Abre la app LavaYa para aceptar la entrega. El primero que acepte se queda con el pedido.</p>
-                  <p style="color:#94a3b8;font-size:12px">Este mensaje se envió automáticamente porque tu estado es "Disponible".</p>
-                </div>
-              `,
-            }),
-          }).catch(e => console.error('Error email a', r.usuario.email, e.message))
-        );
-
-        await Promise.allSettled(emailsPromises);
-        console.log(`✅ Notificación LISTO enviada a ${repartidoresDisponibles.length} repartidores`);
-      } catch (notifErr) {
-        console.error('⚠️ Error enviando notificaciones de pedido LISTO:', notifErr.message);
-        // No bloquear la respuesta por error en notificaciones
-      }
-    }
-
-    const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas. Notificando a repartidores.' };
+    const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas para entrega' };
     res.json({ mensaje: mensajes[estadoFinal], pedido: actualizado });
   } catch (err) { next(err); }
 });
