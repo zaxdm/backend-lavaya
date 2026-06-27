@@ -190,64 +190,49 @@ router.patch('/pedidos/:id/listo', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── AVANZAR estado (un solo clic para el empleado) ──────────
-// Lógica: según el estado actual del pedido, avanza automáticamente
-// al siguiente estado lógico del empleado (o múltiples si aplica).
+// ─── AVANZAR estado (empleado) ───────────────────────────────
+// El empleado SOLO actúa cuando las prendas ya están físicamente
+// en la lavandería (RECOLECTADO en adelante).
+// PENDIENTE y CONFIRMADO los maneja el repartidor, NO el empleado.
 //
-//  PENDIENTE   → RECOLECTADO  (asumimos que ya fue recogido físicamente)
-//  CONFIRMADO  → RECOLECTADO
-//  RECOLECTADO → EN_PROCESO → LISTO  (dos pasos en uno: entra a lavado y queda listo)
-//  EN_PROCESO  → LISTO
+//  RECOLECTADO → EN_PROCESO  (empleado inicia el lavado)
+//  EN_PROCESO  → LISTO       (empleado termina el lavado)
 //
 router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
   try {
     const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
-    const estadosValidos = ['PENDIENTE', 'CONFIRMADO', 'RECOLECTADO', 'EN_PROCESO'];
-    if (!estadosValidos.includes(pedido.estado)) {
-      return res.status(400).json({
-        error: `No se puede avanzar un pedido en estado ${pedido.estado}`,
-      });
-    }
-
     const mañana = new Date();
     mañana.setDate(mañana.getDate() + 1);
 
-    // PENDIENTE / CONFIRMADO → RECOLECTADO (ya lo recibimos físicamente)
-    // RECOLECTADO / EN_PROCESO → LISTO (lavado completo listo para entrega)
-    const esPrimeraFase = pedido.estado === 'PENDIENTE' || pedido.estado === 'CONFIRMADO';
-    const estadoFinal   = esPrimeraFase ? 'RECOLECTADO' : 'LISTO';
-
-    // Construir historial: si va a LISTO desde RECOLECTADO, añadir también EN_PROCESO
-    const historialCreates = [];
+    let estadoFinal, nota, extraData = {};
 
     if (pedido.estado === 'RECOLECTADO') {
-      // Pasar por EN_PROCESO antes de LISTO
-      historialCreates.push({ id: uuidv4(), estado: 'EN_PROCESO', nota: 'Ingresado a lavandería', creadoPor: req.user.id });
+      estadoFinal = 'EN_PROCESO';
+      nota        = 'Ingresado a lavandería';
+    } else if (pedido.estado === 'EN_PROCESO') {
+      estadoFinal = 'LISTO';
+      nota        = 'Prendas listas para entrega';
+      extraData   = { fechaEntregaEstimada: mañana };
+    } else {
+      return res.status(400).json({
+        error: `El empleado solo puede avanzar pedidos en estado RECOLECTADO o EN_PROCESO. Estado actual: ${pedido.estado}`,
+      });
     }
-    historialCreates.push({
-      id: uuidv4(),
-      estado: estadoFinal,
-      nota: esPrimeraFase ? 'Pedido recibido en lavandería' : 'Prendas listas para entrega',
-      creadoPor: req.user.id,
-    });
-
-    const data = {
-      estado: estadoFinal,
-      historial: { create: historialCreates },
-      ...(estadoFinal === 'LISTO' ? { fechaEntregaEstimada: mañana } : {}),
-    };
 
     const actualizado = await prisma.pedido.update({
       where: { id: req.params.id },
-      data,
+      data: {
+        estado: estadoFinal,
+        ...extraData,
+        historial: {
+          create: { id: uuidv4(), estado: estadoFinal, nota, creadoPor: req.user.id },
+        },
+      },
     });
 
-    const mensajes = {
-      RECOLECTADO: 'Pedido recibido en lavandería',
-      LISTO:       'Prendas listas para entrega',
-    };
+    const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas para entrega' };
     res.json({ mensaje: mensajes[estadoFinal], pedido: actualizado });
   } catch (err) { next(err); }
 });
