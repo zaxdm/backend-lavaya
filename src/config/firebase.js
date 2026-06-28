@@ -6,13 +6,21 @@
 //   FIREBASE_PROJECT_ID     — ID del proyecto Firebase (ej: lavaya-7b81f)
 //   FIREBASE_CLIENT_EMAIL   — email de la Service Account
 //   FIREBASE_PRIVATE_KEY    — clave privada RSA (incluye los \n literales)
+//
+// firebase-admin v12+ usa importaciones por submódulo:
+//   app      → require('firebase-admin/app')
+//   messaging → require('firebase-admin/messaging')
 
-const admin = require('firebase-admin');
+const { initializeApp, cert, getApps } = require('firebase-admin/app');
+const { getMessaging }                  = require('firebase-admin/messaging');
 
 let initialized = false;
 
 function initFirebase() {
-  if (initialized) return;
+  if (initialized || getApps().length > 0) {
+    initialized = true;
+    return;
+  }
 
   const projectId   = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
@@ -22,13 +30,13 @@ function initFirebase() {
     console.warn(
       '⚠️  Firebase Admin SDK: faltan variables de entorno ' +
       '(FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY). ' +
-      'Las notificaciones push no funcionarán.'
+      'Las notificaciones push no funcionarán hasta configurarlas en Render.'
     );
     return;
   }
 
-  admin.initializeApp({
-    credential: admin.credential.cert({
+  initializeApp({
+    credential: cert({
       projectId,
       clientEmail,
       // Las \n literales del .env hay que convertirlas en saltos de línea reales
@@ -40,7 +48,7 @@ function initFirebase() {
   console.log('✅ Firebase Admin SDK inicializado correctamente');
 }
 
-// Inicializar en el momento de cargar el módulo
+// Inicializar al cargar el módulo
 initFirebase();
 
 /**
@@ -55,10 +63,12 @@ async function enviarNotificacionPush(tokens, { title, body, data = {} }) {
     return { exitosos: 0, fallidos: tokens?.length ?? 0 };
   }
 
+  const messaging = getMessaging();
+
   const message = {
     notification: { title, body },
     data: Object.fromEntries(
-      // FCM solo acepta strings en data
+      // FCM solo acepta strings en el campo data
       Object.entries(data).map(([k, v]) => [k, String(v)])
     ),
     android: {
@@ -78,12 +88,12 @@ async function enviarNotificacionPush(tokens, { title, body, data = {} }) {
   let exitosos = 0;
   let fallidos  = 0;
 
-  // Envío en lotes de 500 (límite de FCM)
+  // Envío en lotes de 500 (límite de FCM sendEachForMulticast)
   const BATCH = 500;
   for (let i = 0; i < tokens.length; i += BATCH) {
     const lote = tokens.slice(i, i + BATCH);
     try {
-      const response = await admin.messaging().sendEachForMulticast({
+      const response = await messaging.sendEachForMulticast({
         tokens: lote,
         ...message,
       });
@@ -93,8 +103,7 @@ async function enviarNotificacionPush(tokens, { title, body, data = {} }) {
       // Log de tokens inválidos para limpieza futura
       response.responses.forEach((r, idx) => {
         if (!r.success) {
-          const code = r.error?.code;
-          console.warn(`  ❌ Token FCM fallido [${lote[idx].slice(0, 20)}...]: ${code}`);
+          console.warn(`  ❌ Token FCM fallido [${lote[idx].slice(0, 20)}...]: ${r.error?.code}`);
         }
       });
     } catch (err) {
