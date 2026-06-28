@@ -72,7 +72,7 @@ const actualizarPerfil = async (req, res, next) => {
       },
       select: {
         id: true, nombre: true, apellido: true,
-        email: true, telefono: true, fotoPerfil: true,
+        email: true, telefono: true, fotoPerfil: true, rol: true,
       },
     });
     res.json(actualizado);
