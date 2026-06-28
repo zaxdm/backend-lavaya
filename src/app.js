@@ -16,6 +16,7 @@ const empleadoRoutes = require('./routes/empleado.routes');
 const pedidoRoutes = require('./routes/pedido.routes');
 const pagoRoutes = require('./routes/pago.routes');
 const reportesRoutes = require('./routes/reportes.routes');
+const uploadRoutes   = require('./routes/upload.routes');
 
 const app = express();
 
@@ -76,6 +77,7 @@ app.use('/api/empleados',   empleadoRoutes);
 app.use('/api/pedidos',     pedidoRoutes);
 app.use('/api/pagos',       pagoRoutes);
 app.use('/api/reportes',    reportesRoutes);
+app.use('/api/upload',      uploadRoutes);
 // ─── 404 ───────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada' });
