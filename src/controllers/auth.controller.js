@@ -195,11 +195,14 @@ const login = async (req, res, next) => {
     console.log('Login successful!');
     res.json({
       usuario: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        apellido: usuario.apellido,
-        email: usuario.email,
-        rol: usuario.rol,
+        id:         usuario.id,
+        nombre:     usuario.nombre,
+        apellido:   usuario.apellido,
+        email:      usuario.email,
+        rol:        usuario.rol,
+        telefono:   usuario.telefono   ?? null,
+        activo:     usuario.activo,
+        fotoPerfil: usuario.fotoPerfil ?? null,  // ← necesario para persistir la foto tras login
       },
       accessToken,
       refreshToken,

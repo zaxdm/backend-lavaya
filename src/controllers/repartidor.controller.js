@@ -234,7 +234,7 @@ const aceptarPedido = async (req, res, next) => {
 // PATCH /api/repartidores/pedidos/:id/estado
 const cambiarEstadoPedido = async (req, res, next) => {
   try {
-    const { estado: nuevoEstado, nota } = req.body;
+    const { estado: nuevoEstado, nota, fotoUrl } = req.body;
     const repartidor = await getRepartidor(req.user.id);
 
     const pedido = await prisma.pedido.findUnique({
@@ -269,11 +269,24 @@ const cambiarEstadoPedido = async (req, res, next) => {
     }
 
     // ── 1. Actualizar pedido + historial ──
+    // Si el repartidor envía fotoUrl al marcar ENTREGADO, se guarda en notasInternas
+    const notasActuales = pedido.notasInternas
+      ? (() => { try { return JSON.parse(pedido.notasInternas); } catch { return {}; } })()
+      : {};
+
     const pedidoActualizado = await prisma.pedido.update({
       where: { id: req.params.id },
       data: {
         estado: nuevoEstado,
         ...(nuevoEstado === 'ENTREGADO' ? { fechaEntregaReal: new Date() } : {}),
+        // Guardar foto de entrega en notasInternas si se proporcionó
+        ...(nuevoEstado === 'ENTREGADO' && fotoUrl ? {
+          notasInternas: JSON.stringify({
+            ...notasActuales,
+            fotoEntrega:          fotoUrl,
+            fotoEntregaTimestamp: new Date().toISOString(),
+          }),
+        } : {}),
       },
       include: {
         prendas: true,
