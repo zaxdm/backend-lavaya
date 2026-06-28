@@ -4,7 +4,10 @@ const { body, param } = require('express-validator');
 const actualizarPerfilRules = [
   body('nombre').optional().trim().notEmpty().withMessage('El nombre no puede estar vacío'),
   body('apellido').optional().trim().notEmpty().withMessage('El apellido no puede estar vacío'),
-  body('telefono').optional().matches(/^\+?[\d\s\-]{7,15}$/).withMessage('Teléfono inválido'),
+  body('telefono')
+    .optional({ nullable: true })
+    .custom(val => val === null || val === '' || /^\+?[\d\s\-]{7,15}$/.test(val))
+    .withMessage('Teléfono inválido'),
 ];
 
 const agregarDireccionRules = [
