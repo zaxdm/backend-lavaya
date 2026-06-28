@@ -5,6 +5,7 @@ const validate = require('../middlewares/validate.middleware');
 const { cambiarEstadoRules } = require('../middlewares/validators/pedido.validators');
 const prisma = require('../config/prisma');
 const { v4: uuidv4 } = require('uuid');
+const { enviarNotificacionPush } = require('../config/firebase');
 
 const router = Router();
 router.use(authenticate);
@@ -233,16 +234,43 @@ router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
       },
     });
 
-    // ── TODO: Notificación push cuando el pedido queda LISTO ─────
-    // FCM no está configurado todavía. Pendiente de:
-    //   1. Crear proyecto Firebase real y obtener Service Account Key
-    //   2. Agregar FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY al .env
-    //   3. Agregar columna fcmToken a Repartidor en prisma/schema.prisma
-    //   4. Implementar registro de token en la app Flutter (firebase_messaging)
-    //   5. Instalar firebase-admin en el backend: npm install firebase-admin
-    // Una vez listo, reemplazar este bloque con:
-    //   await enviarNotificacionPushListo(req.params.id, pedido, mañana);
-    // ─────────────────────────────────────────────────────────────
+    // ── Notificación push cuando el pedido queda LISTO ───────────
+    if (estadoFinal === 'LISTO') {
+      try {
+        // Obtener todos los repartidores DISPONIBLES que tengan token FCM
+        const repartidoresDisponibles = await prisma.repartidor.findMany({
+          where: {
+            estado: 'DISPONIBLE',
+            fcmToken: { not: null },
+          },
+          select: { fcmToken: true },
+        });
+
+        const tokens = repartidoresDisponibles
+          .map(r => r.fcmToken)
+          .filter(Boolean);
+
+        if (tokens.length > 0) {
+          const { exitosos, fallidos } = await enviarNotificacionPush(tokens, {
+            title: '🚚 Pedido listo para entrega',
+            body:  `Pedido #${req.params.id.slice(0, 8).toUpperCase()} está listo. ¡Acéptalo!`,
+            data: {
+              tipo:        'pedido_listo',
+              pedidoId:    req.params.id,
+            },
+          });
+          console.log(
+            `✅ Notificaciones push enviadas: ${exitosos} ok, ${fallidos} fallidas ` +
+            `(${tokens.length} repartidores DISPONIBLE con token)`
+          );
+        } else {
+          console.log('ℹ️  Pedido LISTO: no hay repartidores DISPONIBLE con token FCM registrado.');
+        }
+      } catch (notifErr) {
+        // No bloquear la respuesta por error en notificaciones
+        console.error('⚠️ Error enviando notificaciones push:', notifErr.message);
+      }
+    }
 
     const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas para entrega' };
     res.json({ mensaje: mensajes[estadoFinal], pedido: actualizado });

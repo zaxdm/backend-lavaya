@@ -85,6 +85,7 @@ model Repartidor {
   longitudActual       Float?
   calificacionPromedio Float            @default(0)
   totalServicios       Int              @default(0)
+  fcmToken             String?          // Token FCM para notificaciones push
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
   calificaciones       Calificacion[]
