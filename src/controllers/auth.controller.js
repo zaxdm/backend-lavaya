@@ -295,6 +295,7 @@ const loginGoogle = async (req, res, next) => {
 
     if (!usuario) {
       // El usuario no existe, lo CREAMOS (registro con Google)
+      // Todo cliente comienza con el plan Básico activo (sin costo)
       usuario = await prisma.usuario.create({
         data: {
           id: uuidv4(),
@@ -308,6 +309,14 @@ const loginGoogle = async (req, res, next) => {
           rol: 'CLIENTE', // Por defecto rol cliente
           puntos: {
             create: { saldo: 0, totalGanados: 0, totalCanjeados: 0 },
+          },
+          membresias: {
+            create: {
+              tipo: 'BASICO',
+              estado: 'ACTIVA',
+              fechaFin: new Date('2099-12-31'),
+              precio: 0,
+            },
           },
         },
       });
