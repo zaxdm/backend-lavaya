@@ -318,8 +318,26 @@ const historialPedidos = async (req, res, next) => {
       prisma.pedido.count({ where }),
     ]);
 
+    // Enriquecer pedidos entregados con los puntos ganados
+    const pedidosIds = pedidos.filter(p => p.estado === 'ENTREGADO').map(p => p.id);
+    const movimientosMap = {};
+    if (pedidosIds.length > 0) {
+      const movimientos = await prisma.movimientoPuntos.findMany({
+        where: { pedidoId: { in: pedidosIds }, cantidad: { gt: 0 } },
+        select: { pedidoId: true, cantidad: true, concepto: true },
+      });
+      movimientos.forEach(m => {
+        if (m.pedidoId) movimientosMap[m.pedidoId] = { cantidad: m.cantidad, concepto: m.concepto };
+      });
+    }
+
+    const pedidosConPuntos = pedidos.map(p => ({
+      ...p,
+      puntosGanados: movimientosMap[p.id] ?? null,
+    }));
+
     res.json({
-      pedidos,
+      pedidos: pedidosConPuntos,
       paginacion: {
         total,
         pagina: parseInt(page),

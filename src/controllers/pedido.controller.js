@@ -199,7 +199,17 @@ const obtenerPedido = async (req, res, next) => {
       return res.status(403).json({ error: 'No tienes acceso a este pedido' });
     }
 
-    res.json(pedido);
+    // Adjuntar puntos ganados por este pedido (si fue entregado)
+    let puntosGanados = null;
+    if (pedido.estado === 'ENTREGADO') {
+      const movimiento = await prisma.movimientoPuntos.findFirst({
+        where: { pedidoId: pedido.id, cantidad: { gt: 0 } },
+        select: { cantidad: true, concepto: true, createdAt: true },
+      });
+      if (movimiento) puntosGanados = movimiento;
+    }
+
+    res.json({ ...pedido, puntosGanados });
   } catch (err) {
     next(err);
   }
