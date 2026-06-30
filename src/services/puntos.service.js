@@ -78,14 +78,16 @@ const otorgarPuntosPorPedido = async (clienteId, pedido, tx) => {
  * @param {string} clienteId
  * @param {number} cantidad - puntos a canjear
  * @param {string} pedidoId
+ * @param {object} [tx] - cliente Prisma de transacción (opcional)
  */
-const canjearPuntos = async (clienteId, cantidad, pedidoId) => {
-  const puntos = await prisma.puntos.findUnique({ where: { usuarioId: clienteId } });
+const canjearPuntos = async (clienteId, cantidad, pedidoId, tx) => {
+  const db = tx || prisma;
+  const puntos = await db.puntos.findUnique({ where: { usuarioId: clienteId } });
   if (!puntos || puntos.saldo < cantidad) {
     throw new Error('Puntos insuficientes');
   }
 
-  await prisma.puntos.update({
+  await db.puntos.update({
     where: { usuarioId: clienteId },
     data: {
       saldo: { decrement: cantidad },
@@ -93,12 +95,12 @@ const canjearPuntos = async (clienteId, cantidad, pedidoId) => {
     },
   });
 
-  await prisma.movimientoPuntos.create({
+  await db.movimientoPuntos.create({
     data: {
       id: uuidv4(),
       puntosId: puntos.id,
       cantidad: -cantidad,
-      concepto: `Canje de puntos por descuento en pedido`,
+      concepto: `Canje de ${cantidad} puntos por descuento en pedido`,
       pedidoId,
     },
   });

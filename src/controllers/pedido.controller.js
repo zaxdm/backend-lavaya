@@ -1,7 +1,7 @@
 // src/controllers/pedido.controller.js
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../config/prisma');
-const { otorgarPuntosPorPedido } = require('../services/puntos.service');
+const { otorgarPuntosPorPedido, canjearPuntos } = require('../services/puntos.service');
 const { TRANSICIONES } = require('../middlewares/validators/pedido.validators');
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -40,7 +40,7 @@ const calcularMontoPedido = (prendas) =>
 // Rol: CLIENTE
 const crearPedido = async (req, res, next) => {
   try {
-    const { direccionId, prendas, fechaRecoleccion, notasCliente, metodoPago } = req.body;
+    const { direccionId, prendas, fechaRecoleccion, notasCliente, metodoPago, puntosACanjear } = req.body;
 
     // Validar fecha de recolección (segunda línea de defensa)
     if (fechaRecoleccion) {
@@ -120,6 +120,31 @@ const crearPedido = async (req, res, next) => {
       }
     }
 
+    // Validar y calcular descuento por puntos
+    // Regla: 50 puntos = S/5.00 de descuento, en múltiplos de 50
+    const PUNTOS_POR_SOL = 50 / 5; // 10 puntos = S/1
+    let puntosCanjeadosReal = 0;
+    let descuentoPuntos = 0;
+
+    if (puntosACanjear && puntosACanjear > 0) {
+      // Redondear a múltiplos de 50
+      const puntosRedondeados = Math.floor(puntosACanjear / 50) * 50;
+      if (puntosRedondeados > 0) {
+        // Verificar saldo disponible
+        const puntosRecord = await prisma.puntos.findUnique({
+          where: { usuarioId: req.user.id },
+        });
+        const saldoActual = puntosRecord?.saldo ?? 0;
+        if (puntosRedondeados > saldoActual) {
+          return res.status(400).json({
+            error: `Puntos insuficientes. Tienes ${saldoActual} pts, intentas canjear ${puntosRedondeados} pts.`,
+          });
+        }
+        puntosCanjeadosReal = puntosRedondeados;
+        descuentoPuntos = puntosCanjeadosReal / PUNTOS_POR_SOL; // en soles
+      }
+    }
+
     // Crear pedido con transacción
     const pedido = await prisma.$transaction(async (tx) => {
       const nuevoPedido = await tx.pedido.create({
@@ -146,28 +171,42 @@ const crearPedido = async (req, res, next) => {
 
       // Crear registro de pago si se indica método
       if (metodoPago && ['PAYPAL', 'EFECTIVO'].includes(metodoPago)) {
-        const monto = calcularMontoPedido(nuevoPedido.prendas);
+        const montoBrutoCalculado = calcularMontoPedido(nuevoPedido.prendas);
+        // Aplicar descuento de puntos al monto final (mínimo S/0.50)
+        const montoFinal = Math.max(0.5, montoBrutoCalculado - descuentoPuntos);
         await tx.pago.create({
           data: {
             id: uuidv4(),
             pedidoId: nuevoPedido.id,
-            monto,
+            monto: montoFinal,
             metodoPago,
             estado: 'PENDIENTE',
+            puntosCanjeados: puntosCanjeadosReal,
           },
         });
       }
 
+      // Descontar puntos del saldo del cliente dentro de la misma transacción
+      if (puntosCanjeadosReal > 0) {
+        await canjearPuntos(req.user.id, puntosCanjeadosReal, nuevoPedido.id, tx);
+      }
+
       return nuevoPedido;
     });
+
+    const montoBruto = calcularMontoPedido(pedido.prendas);
+    const montoFinal = Math.max(0.5, montoBruto - descuentoPuntos);
 
     res.status(201).json({
       mensaje: 'Pedido creado exitosamente',
       pedido,
       totalPrendas,
       tienePrendasExtra,
-      montoBruto: calcularMontoPedido(pedido.prendas),
+      montoBruto,
+      montoFinal,
       descuentoAplicado: descuentoMembresia > 0 ? `${descuentoMembresia}%` : null,
+      puntosCanjeados: puntosCanjeadosReal,
+      descuentoPuntos: descuentoPuntos > 0 ? descuentoPuntos : null,
     });
   } catch (err) {
     next(err);
