@@ -289,7 +289,8 @@ const cambiarEstado = async (req, res, next) => {
 
       // Al entregar: otorgar puntos + marcar pago efectivo si aplica
       if (nuevoEstado === 'ENTREGADO') {
-        await otorgarPuntosPorPedido(pedido.clienteId, actualizado);
+        // Pasar tx para que la operación sea atómica con el update del pedido
+        await otorgarPuntosPorPedido(pedido.clienteId, actualizado, tx);
 
         // Si el método es efectivo, marcar como completado automáticamente
         const pago = await tx.pago.findUnique({ where: { pedidoId } });

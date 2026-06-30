@@ -9,15 +9,23 @@ const PUNTOS_POR_PRENDA = 1;
 /**
  * Otorga puntos al cliente cuando un pedido es ENTREGADO.
  * @param {string} clienteId
- * @param {object} pedido - pedido con prendas incluidas
+ * @param {object} pedido - pedido con prendas incluidas (debe tener totalPrendas e id)
+ * @param {object} [tx] - cliente Prisma de transacción (opcional; si no se pasa usa prisma global)
  */
-const otorgarPuntosPorPedido = async (clienteId, pedido) => {
+const otorgarPuntosPorPedido = async (clienteId, pedido, tx) => {
+  const db = tx || prisma;
   try {
-    // Calcular puntos base
-    let puntosGanados = pedido.totalPrendas * PUNTOS_POR_PRENDA;
+    const totalPrendas = pedido.totalPrendas ?? 0;
+    if (totalPrendas <= 0) {
+      console.warn(`[PuntosService] Pedido ${pedido.id} sin prendas — no se otorgan puntos`);
+      return 0;
+    }
 
-    // Verificar membresía activa para bonus
-    const membresia = await prisma.membresia.findFirst({
+    // Calcular puntos base
+    let puntosGanados = totalPrendas * PUNTOS_POR_PRENDA;
+
+    // Verificar membresía activa para bonus x2
+    const membresia = await db.membresia.findFirst({
       where: {
         usuarioId: clienteId,
         estado: 'ACTIVA',
@@ -28,8 +36,8 @@ const otorgarPuntosPorPedido = async (clienteId, pedido) => {
       puntosGanados = puntosGanados * 2; // bonus x2
     }
 
-    // Actualizar saldo de puntos
-    const puntosRecord = await prisma.puntos.upsert({
+    // Actualizar saldo de puntos (upsert: crea si no existe)
+    const puntosRecord = await db.puntos.upsert({
       where: { usuarioId: clienteId },
       create: {
         id: uuidv4(),
@@ -45,20 +53,22 @@ const otorgarPuntosPorPedido = async (clienteId, pedido) => {
     });
 
     // Registrar movimiento
-    await prisma.movimientoPuntos.create({
+    await db.movimientoPuntos.create({
       data: {
         id: uuidv4(),
         puntosId: puntosRecord.id,
         cantidad: puntosGanados,
-        concepto: `Pedido entregado - ${pedido.totalPrendas} prendas${membresia ? ' (bonus x2 membresía)' : ''}`,
+        concepto: `Pedido entregado - ${totalPrendas} prenda${totalPrendas !== 1 ? 's' : ''}${membresia ? ' (bonus x2 membresía)' : ''}`,
         pedidoId: pedido.id,
       },
     });
 
+    console.log(`[PuntosService] +${puntosGanados} pts → cliente ${clienteId} (pedido ${pedido.id})`);
     return puntosGanados;
   } catch (err) {
-    // No romper el flujo principal si falla el registro de puntos
-    console.error('[PuntosService] Error otorgando puntos:', err.message);
+    // No romper el flujo principal si falla el registro de puntos,
+    // pero sí registrar el error claramente para poder depurar.
+    console.error(`[PuntosService] Error otorgando puntos para pedido ${pedido?.id}:`, err.message);
     return 0;
   }
 };
