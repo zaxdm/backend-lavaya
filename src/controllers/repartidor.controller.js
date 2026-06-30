@@ -260,8 +260,9 @@ const cambiarEstadoPedido = async (req, res, next) => {
       });
     }
 
-    // Repartidor solo mueve estados de su scope
-    const estadosRepartidor = ['CONFIRMADO', 'RECOLECTADO', 'EN_CAMINO', 'ENTREGADO'];
+    // Repartidor solo mueve estados de su scope:
+    // Recoge del cliente (CONFIRMADO → RECOLECTADO) y entrega (EN_CAMINO → ENTREGADO)
+    const estadosRepartidor = ['RECOLECTADO', 'ENTREGADO'];
     if (!estadosRepartidor.includes(nuevoEstado)) {
       return res.status(403).json({
         error: `El repartidor no puede asignar el estado ${nuevoEstado}`,

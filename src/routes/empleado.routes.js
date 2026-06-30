@@ -220,9 +220,12 @@ router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
       estadoFinal = 'LISTO';
       nota        = 'Prendas listas para entrega';
       extraData   = { fechaEntregaEstimada: mañana };
+    } else if (pedido.estado === 'LISTO') {
+      estadoFinal = 'EN_CAMINO';
+      nota        = 'Repartidor de entrega en camino al cliente';
     } else {
       return res.status(400).json({
-        error: `El empleado solo puede avanzar pedidos en RECOLECTADO o EN_PROCESO. Estado actual: ${pedido.estado}`,
+        error: `El empleado solo puede avanzar pedidos en RECOLECTADO, EN_PROCESO o LISTO. Estado actual: ${pedido.estado}`,
       });
     }
 
@@ -275,7 +278,7 @@ router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
       }
     }
 
-    const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas para entrega' };
+    const mensajes = { EN_PROCESO: 'Lavado iniciado', LISTO: 'Prendas listas para entrega', EN_CAMINO: 'Repartidor en camino al cliente' };
     res.json({ mensaje: mensajes[estadoFinal], pedido: actualizado });
   } catch (err) { next(err); }
 });

@@ -239,9 +239,11 @@ const cambiarEstado = async (req, res, next) => {
     }
 
     // El repartidor solo puede mover estados de su flujo
+    // Recoge las prendas (CONFIRMADO → RECOLECTADO) y las entrega (EN_CAMINO → ENTREGADO)
+    // El empleado es quien marca EN_CAMINO cuando el repartidor de entrega ya salió
     if (req.user.rol === 'REPARTIDOR') {
       const repartidor = await prisma.repartidor.findUnique({ where: { usuarioId: req.user.id } });
-      const estadosRepartidor = ['CONFIRMADO', 'RECOLECTADO', 'EN_CAMINO', 'ENTREGADO'];
+      const estadosRepartidor = ['RECOLECTADO', 'ENTREGADO'];
       if (!estadosRepartidor.includes(nuevoEstado)) {
         return res.status(403).json({ error: 'El repartidor no puede asignar este estado' });
       }
@@ -253,9 +255,9 @@ const cambiarEstado = async (req, res, next) => {
       }
     }
 
-    // El empleado maneja estados de lavandería
+    // El empleado maneja estados de lavandería y despacho
     if (req.user.rol === 'EMPLEADO') {
-      const estadosEmpleado = ['EN_PROCESO', 'LISTO'];
+      const estadosEmpleado = ['EN_PROCESO', 'LISTO', 'EN_CAMINO'];
       if (!estadosEmpleado.includes(nuevoEstado)) {
         return res.status(403).json({ error: 'El empleado no puede asignar este estado' });
       }
