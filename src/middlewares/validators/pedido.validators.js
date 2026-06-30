@@ -17,7 +17,7 @@ const TRANSICIONES = {
   RECOLECTADO: ['EN_PROCESO', 'EN_CAMINO'],  // empleado puede avanzar directo o pasar por proceso interno
   EN_PROCESO:  ['LISTO', 'EN_CAMINO'],       // empleado puede ir a listo o directo en camino
   LISTO:       ['EN_CAMINO'],
-  EN_CAMINO:   ['ENTREGADO'],
+  EN_CAMINO:   ['ENTREGADO', 'CANCELADO'],   // repartidor puede cancelar si no puede entregar
   ENTREGADO:   [],
   CANCELADO:   [],
 };

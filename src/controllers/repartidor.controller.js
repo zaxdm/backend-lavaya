@@ -2,6 +2,7 @@
 const { v4: uuidv4 } = require('uuid');
 const prisma = require('../config/prisma');
 const { TRANSICIONES } = require('../middlewares/validators/pedido.validators');
+const { otorgarPuntosPorPedido } = require('../services/puntos.service');
 
 // ─── Helper: obtener perfil repartidor del usuario autenticado ─
 const getRepartidor = async (usuarioId) => {
@@ -261,8 +262,9 @@ const cambiarEstadoPedido = async (req, res, next) => {
     }
 
     // Repartidor solo mueve estados de su scope:
-    // Recoge del cliente (CONFIRMADO → RECOLECTADO) y entrega (EN_CAMINO → ENTREGADO)
-    const estadosRepartidor = ['RECOLECTADO', 'ENTREGADO'];
+    // Recoge del cliente (CONFIRMADO → RECOLECTADO), entrega (EN_CAMINO → ENTREGADO)
+    // y puede cancelar si no puede completar su tarea (CONFIRMADO|EN_CAMINO → CANCELADO)
+    const estadosRepartidor = ['RECOLECTADO', 'ENTREGADO', 'CANCELADO'];
     if (!estadosRepartidor.includes(nuevoEstado)) {
       return res.status(403).json({
         error: `El repartidor no puede asignar el estado ${nuevoEstado}`,
@@ -351,6 +353,9 @@ const cambiarEstadoPedido = async (req, res, next) => {
 
     // ── 4. Efectos al entregar ──
     if (nuevoEstado === 'ENTREGADO') {
+      // Otorgar puntos al CLIENTE por las prendas lavadas
+      await otorgarPuntosPorPedido(pedido.clienteId, pedidoActualizado);
+
       const pedidosActivos = await prisma.pedido.count({
         where: {
           OR: [
@@ -376,6 +381,15 @@ const cambiarEstadoPedido = async (req, res, next) => {
           data: { estado: 'COMPLETADO', recolectadoPor: req.user.id },
         });
       }
+    }
+
+    // ── 5. Efectos al cancelar ──
+    if (nuevoEstado === 'CANCELADO') {
+      // El repartidor queda disponible para tomar otro pedido
+      await prisma.repartidor.update({
+        where: { id: repartidor.id },
+        data: { estado: 'DISPONIBLE' },
+      });
     }
 
     res.json({ mensaje: `Estado actualizado a ${nuevoEstado}`, pedido: pedidoActualizado });
