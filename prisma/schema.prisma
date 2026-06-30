@@ -106,6 +106,7 @@ model Pedido {
   totalPrendas            Int
   tienePrendasExtra       Boolean           @default(false)
   fechaRecoleccion        DateTime?
+  franjaRecoleccion       String?           // "08:00-10:00", "10:00-12:00", etc.
   fechaEntregaEstimada    DateTime?
   fechaEntregaReal        DateTime?
   notasCliente            String?           @db.Text
@@ -307,6 +308,8 @@ enum EstadoPedido {
   EN_CAMINO
   ENTREGADO
   CANCELADO
+  RETRASADO      // pasó el fin de la franja sin ser recolectado
+  REPROGRAMADO   // cliente cambió la fecha/franja después de crear el pedido
 }
 
 enum EstadoPago {

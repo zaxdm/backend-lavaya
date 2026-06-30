@@ -40,7 +40,7 @@ const calcularMontoPedido = (prendas) =>
 // Rol: CLIENTE
 const crearPedido = async (req, res, next) => {
   try {
-    const { direccionId, prendas, fechaRecoleccion, notasCliente, metodoPago, puntosACanjear } = req.body;
+    const { direccionId, prendas, fechaRecoleccion, franjaRecoleccion, notasCliente, metodoPago, puntosACanjear } = req.body;
 
     // Validar fecha de recolección (segunda línea de defensa)
     if (fechaRecoleccion) {
@@ -155,6 +155,7 @@ const crearPedido = async (req, res, next) => {
           totalPrendas,
           tienePrendasExtra,
           fechaRecoleccion: fechaRecoleccion ? new Date(fechaRecoleccion) : null,
+          franjaRecoleccion: franjaRecoleccion || null,
           notasCliente: notasCliente || null,
           prendas: { create: prendasData },
           historial: {
@@ -501,6 +502,56 @@ const asignarRepartidor = async (req, res, next) => {
   }
 };
 
+// ─── Reprogramar pedido (Cliente) ────────────────────────────
+// PATCH /api/pedidos/:id/reprogramar
+// Rol: CLIENTE (solo sus pedidos en PENDIENTE, CONFIRMADO o RETRASADO)
+const reprogramarPedido = async (req, res, next) => {
+  try {
+    const { fechaRecoleccion, franjaRecoleccion } = req.body;
+    const pedido = await prisma.pedido.findUnique({ where: { id: req.params.id } });
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    // Solo el propio cliente puede reprogramar
+    if (req.user.rol === 'CLIENTE' && pedido.clienteId !== req.user.id) {
+      return res.status(403).json({ error: 'No tienes acceso a este pedido' });
+    }
+
+    // Solo estados donde la recolección aún no ocurrió
+    const estadosReprogramables = ['PENDIENTE', 'CONFIRMADO', 'RETRASADO'];
+    if (!estadosReprogramables.includes(pedido.estado)) {
+      return res.status(400).json({
+        error: `No se puede reprogramar un pedido en estado ${pedido.estado}`,
+      });
+    }
+
+    const actualizado = await prisma.$transaction(async (tx) => {
+      const p = await tx.pedido.update({
+        where: { id: req.params.id },
+        data: {
+          estado: 'REPROGRAMADO',
+          fechaRecoleccion: new Date(fechaRecoleccion),
+          franjaRecoleccion: franjaRecoleccion || null,
+        },
+        include: INCLUDE_PEDIDO_COMPLETO,
+      });
+      await tx.historialPedido.create({
+        data: {
+          id: uuidv4(),
+          pedidoId: req.params.id,
+          estado: 'REPROGRAMADO',
+          nota: `Reprogramado por cliente para ${fechaRecoleccion}${franjaRecoleccion ? ' franja ' + franjaRecoleccion : ''}`,
+          creadoPor: req.user.id,
+        },
+      });
+      return p;
+    });
+
+    res.json({ mensaje: 'Pedido reprogramado exitosamente', pedido: actualizado });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   crearPedido,
   obtenerPedido,
@@ -508,4 +559,5 @@ module.exports = {
   cancelarPedido,
   listarPedidos,
   asignarRepartidor,
+  reprogramarPedido,
 };

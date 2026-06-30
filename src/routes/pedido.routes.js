@@ -2,7 +2,11 @@
 const { Router } = require('express');
 const { authenticate, authorize } = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate.middleware');
-const { crearPedidoRules, cambiarEstadoRules } = require('../middlewares/validators/pedido.validators');
+const {
+  crearPedidoRules,
+  cambiarEstadoRules,
+  reprogramarPedidoRules,
+} = require('../middlewares/validators/pedido.validators');
 const {
   crearPedido,
   obtenerPedido,
@@ -10,6 +14,7 @@ const {
   cancelarPedido,
   listarPedidos,
   asignarRepartidor,
+  reprogramarPedido,
 } = require('../controllers/pedido.controller');
 
 const router = Router();
@@ -47,6 +52,15 @@ router.patch(
   cambiarEstado
 );
 
+// Reprogramar (cliente cambia fecha/franja de un pedido no recolectado aún)
+router.patch(
+  '/:id/reprogramar',
+  authorize('CLIENTE', 'ADMIN'),
+  reprogramarPedidoRules,
+  validate,
+  reprogramarPedido
+);
+
 // Cancelar
 router.patch(
   '/:id/cancelar',
@@ -62,3 +76,4 @@ router.patch(
 );
 
 module.exports = router;
+

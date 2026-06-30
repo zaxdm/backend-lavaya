@@ -4,22 +4,36 @@ const { body, param } = require('express-validator');
 const ESTADOS_VALIDOS = [
   'PENDIENTE', 'CONFIRMADO', 'RECOLECTADO',
   'EN_PROCESO', 'LISTO', 'EN_CAMINO', 'ENTREGADO', 'CANCELADO',
+  'RETRASADO', 'REPROGRAMADO',
+];
+
+// Franjas horarias válidas (deben coincidir con las del cliente Flutter/Next.js)
+const FRANJAS_VALIDAS = [
+  '08:00-10:00',
+  '10:00-12:00',
+  '12:00-14:00',
+  '14:00-16:00',
+  '16:00-18:00',
+  '18:00-20:00',
 ];
 
 // Mínimo de horas de anticipación para programar un recojo
-const MIN_HORAS_ANTICIPACION = 1;
+const MIN_HORAS_ANTICIPACION = 2;
 
 // Flujo visible: Por recoger → En lavandería → En camino → Entregado
-// EN_PROCESO y LISTO son estados internos del empleado dentro de "En lavandería"
+// RETRASADO:    se asigna automáticamente por el cron si la franja venció sin recolección
+// REPROGRAMADO: el cliente reprogramó la fecha/franja de un pedido existente
 const TRANSICIONES = {
-  PENDIENTE:   ['CONFIRMADO', 'CANCELADO'],
-  CONFIRMADO:  ['RECOLECTADO', 'CANCELADO'],
-  RECOLECTADO: ['EN_PROCESO', 'EN_CAMINO'],  // empleado puede avanzar directo o pasar por proceso interno
-  EN_PROCESO:  ['LISTO', 'EN_CAMINO'],       // empleado puede ir a listo o directo en camino
-  LISTO:       ['EN_CAMINO'],
-  EN_CAMINO:   ['ENTREGADO', 'CANCELADO'],   // repartidor puede cancelar si no puede entregar
-  ENTREGADO:   [],
-  CANCELADO:   [],
+  PENDIENTE:    ['CONFIRMADO', 'CANCELADO', 'REPROGRAMADO'],
+  CONFIRMADO:   ['RECOLECTADO', 'CANCELADO', 'REPROGRAMADO'],
+  RETRASADO:    ['CONFIRMADO', 'CANCELADO', 'REPROGRAMADO'], // admin/empleado puede reactivar
+  REPROGRAMADO: ['CONFIRMADO', 'CANCELADO'],
+  RECOLECTADO:  ['EN_PROCESO', 'EN_CAMINO'],
+  EN_PROCESO:   ['LISTO', 'EN_CAMINO'],
+  LISTO:        ['EN_CAMINO'],
+  EN_CAMINO:    ['ENTREGADO', 'CANCELADO'],
+  ENTREGADO:    [],
+  CANCELADO:    [],
 };
 
 const crearPedidoRules = [
@@ -43,25 +57,27 @@ const crearPedidoRules = [
     .optional({ nullable: true, checkFalsy: true })
     .isISO8601().withMessage('Formato de fecha inválido')
     .custom((value) => {
-      if (!value) return true; // es opcional
+      if (!value) return true;
       const fecha = new Date(value);
-      if (isNaN(fecha.getTime())) {
-        throw new Error('La fecha de recolección no es válida');
-      }
+      if (isNaN(fecha.getTime())) throw new Error('La fecha de recolección no es válida');
       const ahora = new Date();
       const minFutura = new Date(ahora.getTime() + MIN_HORAS_ANTICIPACION * 60 * 60 * 1000);
       if (fecha < minFutura) {
         throw new Error(
-          `La fecha de recolección debe ser al menos ${MIN_HORAS_ANTICIPACION} hora(s) en el futuro`
+          `La fecha de recolección debe ser al menos ${MIN_HORAS_ANTICIPACION} horas en el futuro`
         );
       }
-      // No más de 30 días en el futuro
       const maxFutura = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
       if (fecha > maxFutura) {
         throw new Error('La fecha de recolección no puede ser más de 30 días en el futuro');
       }
       return true;
     }),
+
+  body('franjaRecoleccion')
+    .optional({ nullable: true, checkFalsy: true })
+    .isIn(FRANJAS_VALIDAS)
+    .withMessage(`Franja inválida. Opciones: ${FRANJAS_VALIDAS.join(', ')}`),
 
   body('notasCliente')
     .optional({ nullable: true, checkFalsy: true })
@@ -74,4 +90,31 @@ const cambiarEstadoRules = [
     .isIn(ESTADOS_VALIDOS).withMessage(`Estado debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}`),
 ];
 
-module.exports = { crearPedidoRules, cambiarEstadoRules, TRANSICIONES };
+const reprogramarPedidoRules = [
+  param('id').notEmpty().withMessage('ID de pedido requerido'),
+  body('fechaRecoleccion')
+    .notEmpty().withMessage('La nueva fecha de recolección es obligatoria')
+    .isISO8601().withMessage('Formato de fecha inválido')
+    .custom((value) => {
+      const fecha = new Date(value);
+      if (isNaN(fecha.getTime())) throw new Error('Fecha inválida');
+      const ahora = new Date();
+      const minFutura = new Date(ahora.getTime() + MIN_HORAS_ANTICIPACION * 60 * 60 * 1000);
+      if (fecha < minFutura) {
+        throw new Error(`Debe ser al menos ${MIN_HORAS_ANTICIPACION} horas en el futuro`);
+      }
+      const maxFutura = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      if (fecha > maxFutura) throw new Error('No puede ser más de 30 días en el futuro');
+      return true;
+    }),
+  body('franjaRecoleccion')
+    .optional({ nullable: true, checkFalsy: true })
+    .isIn(FRANJAS_VALIDAS)
+    .withMessage(`Franja inválida. Opciones: ${FRANJAS_VALIDAS.join(', ')}`),
+];
+
+module.exports = {
+  crearPedidoRules, cambiarEstadoRules, reprogramarPedidoRules,
+  TRANSICIONES, FRANJAS_VALIDAS,
+};
+
