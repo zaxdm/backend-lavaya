@@ -9,11 +9,13 @@ const ESTADOS_VALIDOS = [
 // Mínimo de horas de anticipación para programar un recojo
 const MIN_HORAS_ANTICIPACION = 1;
 
+// Flujo visible: Por recoger → En lavandería → En camino → Entregado
+// EN_PROCESO y LISTO son estados internos del empleado dentro de "En lavandería"
 const TRANSICIONES = {
   PENDIENTE:   ['CONFIRMADO', 'CANCELADO'],
   CONFIRMADO:  ['RECOLECTADO', 'CANCELADO'],
-  RECOLECTADO: ['EN_PROCESO'],
-  EN_PROCESO:  ['LISTO'],
+  RECOLECTADO: ['EN_PROCESO', 'EN_CAMINO'],  // empleado puede avanzar directo o pasar por proceso interno
+  EN_PROCESO:  ['LISTO', 'EN_CAMINO'],       // empleado puede ir a listo o directo en camino
   LISTO:       ['EN_CAMINO'],
   EN_CAMINO:   ['ENTREGADO'],
   ENTREGADO:   [],
