@@ -30,7 +30,8 @@ const FRANJAS_VALIDAS = null; // ya no se usa — ver esFranjaValida()
 // Mínimo de horas de anticipación: 0 (el cliente puede pedir desde la hora actual)
 const MIN_HORAS_ANTICIPACION = 0;
 
-// Flujo visible: Por recoger → En lavandería → En camino → Entregado
+// Flujo simplificado: RECOLECTADO → EN_CAMINO directo (empleado da 1 clic "Listo")
+// EN_PROCESO y LISTO ya no forman parte del flujo visible.
 // RETRASADO:    se asigna automáticamente por el cron si la franja venció sin recolección
 // REPROGRAMADO: el cliente reprogramó la fecha/franja de un pedido existente
 const TRANSICIONES = {
@@ -38,12 +39,13 @@ const TRANSICIONES = {
   CONFIRMADO:   ['RECOLECTADO', 'CANCELADO', 'REPROGRAMADO'],
   RETRASADO:    ['CONFIRMADO', 'CANCELADO', 'REPROGRAMADO'], // admin/empleado puede reactivar
   REPROGRAMADO: ['CONFIRMADO', 'CANCELADO'],
-  RECOLECTADO:  ['EN_PROCESO', 'EN_CAMINO'],
-  EN_PROCESO:   ['LISTO', 'EN_CAMINO'],
-  LISTO:        ['EN_CAMINO'],
+  RECOLECTADO:  ['EN_CAMINO', 'CANCELADO'],  // empleado marca "Listo" → EN_CAMINO directo
   EN_CAMINO:    ['ENTREGADO', 'CANCELADO'],
   ENTREGADO:    [],
   CANCELADO:    [],
+  // Estados legacy — se mantienen en el enum pero no son alcanzables por flujo normal
+  EN_PROCESO:   [],
+  LISTO:        [],
 };
 
 const crearPedidoRules = [

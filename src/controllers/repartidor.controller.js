@@ -357,26 +357,25 @@ const cambiarEstadoPedido = async (req, res, next) => {
       }
     }
 
-    // ── 4. Efectos al entregar ──
+    // ── 4. Efectos al RECOLECTAR — repartidor queda libre inmediatamente ──
+    // El repartidor deja la ropa en la lavandería y ya no necesita esperar.
+    // Queda DISPONIBLE para aceptar otro pedido.
+    if (nuevoEstado === 'RECOLECTADO') {
+      await prisma.repartidor.update({
+        where: { id: repartidor.id },
+        data: { estado: 'DISPONIBLE' },
+      });
+    }
+
+    // ── 5. Efectos al entregar ──
     if (nuevoEstado === 'ENTREGADO') {
       // Otorgar puntos al CLIENTE por las prendas lavadas
       await otorgarPuntosPorPedido(pedido.clienteId, pedidoActualizado);
 
-      const pedidosActivos = await prisma.pedido.count({
-        where: {
-          OR: [
-            { repartidorRecoleccionId: repartidor.id },
-            { repartidorEntregaId: repartidor.id },
-          ],
-          estado: { notIn: ['ENTREGADO', 'CANCELADO'] },
-          id: { not: req.params.id },
-        },
-      });
-
       await prisma.repartidor.update({
         where: { id: repartidor.id },
         data: {
-          estado: pedidosActivos === 0 ? 'DISPONIBLE' : 'OCUPADO',
+          estado: 'DISPONIBLE',
           totalServicios: { increment: 1 },
         },
       });
@@ -389,7 +388,7 @@ const cambiarEstadoPedido = async (req, res, next) => {
       }
     }
 
-    // ── 5. Efectos al cancelar ──
+    // ── 6. Efectos al cancelar ──
     if (nuevoEstado === 'CANCELADO') {
       // El repartidor queda disponible para tomar otro pedido
       await prisma.repartidor.update({

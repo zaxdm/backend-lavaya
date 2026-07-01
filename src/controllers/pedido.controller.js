@@ -288,9 +288,9 @@ const cambiarEstado = async (req, res, next) => {
       }
     }
 
-    // El empleado maneja estados de lavandería y despacho
+    // El empleado maneja solo el despacho: RECOLECTADO → EN_CAMINO
     if (req.user.rol === 'EMPLEADO') {
-      const estadosEmpleado = ['EN_PROCESO', 'LISTO', 'EN_CAMINO'];
+      const estadosEmpleado = ['EN_CAMINO'];
       if (!estadosEmpleado.includes(nuevoEstado)) {
         return res.status(403).json({ error: 'El empleado no puede asignar este estado' });
       }

@@ -195,15 +195,9 @@ router.patch('/pedidos/:id/listo', async (req, res, next) => {
 });
 
 // ─── AVANZAR estado (empleado) ───────────────────────────────
-// Flujo visible: Por recoger → En lavandería → En camino → Entregado
-//
-//  RECOLECTADO → EN_PROCESO  (empleado inicia el lavado — interno)
-//  EN_PROCESO  → LISTO       (empleado termina el lavado — interno)
-//  LISTO       → EN_CAMINO   (empleado despacha al repartidor — visible "En camino")
-//
-// El botón principal del empleado avanza el paso actual.
-// Con RECOLECTADO/EN_PROCESO/LISTO el empleado ve la lavandería y puede avanzar.
-// Con LISTO el empleado marca "En camino" que es lo que ve el cliente.
+// Flujo simplificado: el empleado da UN solo clic "Listo"
+//   RECOLECTADO → EN_CAMINO  (empleado confirma que la ropa está lista y sale)
+//   La notificación push va a todos los repartidores disponibles.
 //
 router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
   try {
@@ -212,64 +206,41 @@ router.patch('/pedidos/:id/avanzar', async (req, res, next) => {
     });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
-    const mañana = new Date();
-    mañana.setDate(mañana.getDate() + 1);
-
-    let estadoFinal, nota, extraData = {};
-
-    if (pedido.estado === 'RECOLECTADO') {
-      estadoFinal = 'EN_PROCESO';
-      nota        = 'Lavado iniciado';
-    } else if (pedido.estado === 'EN_PROCESO') {
-      estadoFinal = 'LISTO';
-      nota        = 'Prendas listas';
-      extraData   = { fechaEntregaEstimada: mañana };
-    } else if (pedido.estado === 'LISTO') {
-      estadoFinal = 'EN_CAMINO';
-      nota        = 'Repartidor en camino al cliente';
-    } else {
+    if (pedido.estado !== 'RECOLECTADO') {
       return res.status(400).json({
-        error: `El empleado no puede avanzar un pedido en estado ${pedido.estado}`,
+        error: `El empleado solo puede marcar como listo un pedido RECOLECTADO. Estado actual: ${pedido.estado}`,
       });
     }
 
     const actualizado = await prisma.pedido.update({
       where: { id: req.params.id },
       data: {
-        estado: estadoFinal,
-        ...extraData,
+        estado: 'EN_CAMINO',
         historial: {
-          create: { id: uuidv4(), estado: estadoFinal, nota, creadoPor: req.user.id },
+          create: { id: uuidv4(), estado: 'EN_CAMINO', nota: 'Listo — repartidor notificado', creadoPor: req.user.id },
         },
       },
     });
 
-    // Notificación push cuando el pedido queda EN_CAMINO
-    if (estadoFinal === 'EN_CAMINO') {
-      try {
-        const repartidoresDisponibles = await prisma.repartidor.findMany({
-          where: { estado: 'DISPONIBLE', fcmToken: { not: null } },
-          select: { fcmToken: true },
+    // Notificación push a todos los repartidores disponibles
+    try {
+      const repartidoresDisponibles = await prisma.repartidor.findMany({
+        where: { estado: 'DISPONIBLE', fcmToken: { not: null } },
+        select: { fcmToken: true },
+      });
+      const tokens = repartidoresDisponibles.map(r => r.fcmToken).filter(Boolean);
+      if (tokens.length > 0) {
+        await enviarNotificacionPush(tokens, {
+          title: '📦 Pedido listo para entrega',
+          body:  `Pedido #${req.params.id.slice(0, 8).toUpperCase()} está listo. ¡A entregar!`,
+          data: { tipo: 'pedido_listo_entrega', pedidoId: req.params.id },
         });
-        const tokens = repartidoresDisponibles.map(r => r.fcmToken).filter(Boolean);
-        if (tokens.length > 0) {
-          await enviarNotificacionPush(tokens, {
-            title: '🚚 Pedido en camino',
-            body:  `Pedido #${req.params.id.slice(0, 8).toUpperCase()} está en camino al cliente.`,
-            data: { tipo: 'pedido_en_camino', pedidoId: req.params.id },
-          });
-        }
-      } catch (notifErr) {
-        console.error('⚠️ Error enviando notificaciones push:', notifErr.message);
       }
+    } catch (notifErr) {
+      console.error('⚠️ Error enviando notificaciones push:', notifErr.message);
     }
 
-    const mensajes = {
-      EN_PROCESO: 'Lavado iniciado',
-      LISTO:      'Prendas listas',
-      EN_CAMINO:  'Repartidor en camino al cliente',
-    };
-    res.json({ mensaje: mensajes[estadoFinal], pedido: actualizado });
+    res.json({ mensaje: 'Pedido marcado como listo — repartidores notificados', pedido: actualizado });
   } catch (err) { next(err); }
 });
 
