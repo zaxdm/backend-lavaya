@@ -17,8 +17,8 @@ const FRANJAS_VALIDAS = [
   '18:00-20:00',
 ];
 
-// Mínimo de horas de anticipación para programar un recojo
-const MIN_HORAS_ANTICIPACION = 2;
+// Mínimo de horas de anticipación: 0 (el cliente puede pedir desde la hora actual)
+const MIN_HORAS_ANTICIPACION = 0;
 
 // Flujo visible: Por recoger → En lavandería → En camino → Entregado
 // RETRASADO:    se asigna automáticamente por el cron si la franja venció sin recolección
@@ -60,14 +60,8 @@ const crearPedidoRules = [
       if (!value) return true;
       const fecha = new Date(value);
       if (isNaN(fecha.getTime())) throw new Error('La fecha de recolección no es válida');
-      const ahora = new Date();
-      const minFutura = new Date(ahora.getTime() + MIN_HORAS_ANTICIPACION * 60 * 60 * 1000);
-      if (fecha < minFutura) {
-        throw new Error(
-          `La fecha de recolección debe ser al menos ${MIN_HORAS_ANTICIPACION} horas en el futuro`
-        );
-      }
-      const maxFutura = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      // Solo validar que no sea más de 30 días en el futuro
+      const maxFutura = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       if (fecha > maxFutura) {
         throw new Error('La fecha de recolección no puede ser más de 30 días en el futuro');
       }
@@ -98,12 +92,7 @@ const reprogramarPedidoRules = [
     .custom((value) => {
       const fecha = new Date(value);
       if (isNaN(fecha.getTime())) throw new Error('Fecha inválida');
-      const ahora = new Date();
-      const minFutura = new Date(ahora.getTime() + MIN_HORAS_ANTICIPACION * 60 * 60 * 1000);
-      if (fecha < minFutura) {
-        throw new Error(`Debe ser al menos ${MIN_HORAS_ANTICIPACION} horas en el futuro`);
-      }
-      const maxFutura = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const maxFutura = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       if (fecha > maxFutura) throw new Error('No puede ser más de 30 días en el futuro');
       return true;
     }),

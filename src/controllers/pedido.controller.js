@@ -48,14 +48,7 @@ const crearPedido = async (req, res, next) => {
       if (isNaN(fecha.getTime())) {
         return res.status(400).json({ error: 'La fecha de recolección no es válida' });
       }
-      const ahora = new Date();
-      const minFutura = new Date(ahora.getTime() + 60 * 60 * 1000); // mín. 1 hora en el futuro
-      if (fecha < minFutura) {
-        return res.status(400).json({
-          error: 'La fecha de recolección debe ser al menos 1 hora en el futuro. No puedes programar recogidas en el pasado.',
-        });
-      }
-      const maxFutura = new Date(ahora.getTime() + 30 * 24 * 60 * 60 * 1000);
+      const maxFutura = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       if (fecha > maxFutura) {
         return res.status(400).json({ error: 'La fecha de recolección no puede ser más de 30 días en el futuro' });
       }
