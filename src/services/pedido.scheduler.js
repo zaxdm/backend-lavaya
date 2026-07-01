@@ -15,14 +15,20 @@ const { v4: uuidv4 } = require('uuid');
  * Dado "HH:MM-HH:MM" devuelve el Date del fin de la franja en la fecha indicada.
  * Ej: "12:00-14:00", fecha 2026-06-30 → Date del 2026-06-30T14:00:00 local
  */
-function finDeFranja(fecha, franja) {
-  if (!franja) return null;
-  const partes = franja.split('-');          // ["12:00", "14:00"]
-  if (partes.length !== 2) return null;
-  const [hh, mm] = partes[1].split(':').map(Number);
-  const fin = new Date(fecha);
-  fin.setHours(hh, mm, 0, 0);
-  return fin;
+/**
+ * Dado un Date (ya en UTC desde la BD) y una franja "HH:MM-HH:MM",
+ * devuelve el Date del FIN de la franja en UTC.
+ *
+ * La fechaRecoleccion almacenada es el INICIO de la franja en UTC.
+ * Por ej: cliente en Perú eligió 08:00-10:00 → BD guarda 2026-06-30T13:00:00Z (08:00 UTC-5)
+ * Fin de franja = inicio + 2 horas = 2026-06-30T15:00:00Z
+ *
+ * La franja se usa solo para calcular la duración (siempre 2h en este sistema).
+ */
+function finDeFranja(fechaUTC) {
+  if (!fechaUTC) return null;
+  // Todas las franjas son de 2 horas → fin = inicio + 2h
+  return new Date(new Date(fechaUTC).getTime() + 2 * 60 * 60 * 1000);
 }
 
 async function crearHistorial(tx, pedidoId, estado, nota) {
@@ -66,7 +72,7 @@ async function marcarRetrasados() {
   let marcados = 0;
 
   for (const p of candidatos) {
-    const fin = finDeFranja(p.fechaRecoleccion, p.franjaRecoleccion);
+    const fin = finDeFranja(p.fechaRecoleccion);
     if (!fin || fin > ahora) continue; // la franja aún no terminó
 
     await prisma.$transaction(async (tx) => {
