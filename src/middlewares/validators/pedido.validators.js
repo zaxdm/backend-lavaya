@@ -7,18 +7,25 @@ const ESTADOS_VALIDOS = [
   'RETRASADO', 'REPROGRAMADO',
 ];
 
-// Franjas horarias válidas (deben coincidir con las del cliente Flutter/Next.js)
-const FRANJAS_VALIDAS = [
-  '08:00-10:00',
-  '10:00-12:00',
-  '12:00-14:00',
-  '14:00-16:00',
-  '16:00-18:00',
-  '18:00-20:00',
-  '20:00-22:00',
-  '22:00-00:00', // cruza medianoche
-  '00:00-03:00',
-];
+// Franja horaria libre: cualquier valor "HH:MM-HH:MM" es válido.
+// El cliente elige hora de inicio y hora de fin libremente.
+const FRANJA_REGEX = /^\d{2}:\d{2}-\d{2}:\d{2}$/;
+
+/**
+ * Valida que una franja tenga el formato HH:MM-HH:MM y que las horas sean válidas.
+ * Permite franjas que cruzan la medianoche (p.ej. 22:00-03:00).
+ */
+function esFranjaValida(franja) {
+  if (!franja || !FRANJA_REGEX.test(franja)) return false;
+  const [ini, fin] = franja.split('-');
+  const [hIni, mIni] = ini.split(':').map(Number);
+  const [hFin, mFin] = fin.split(':').map(Number);
+  return hIni >= 0 && hIni <= 23 && mIni >= 0 && mIni <= 59
+      && hFin >= 0 && hFin <= 23 && mFin >= 0 && mFin <= 59;
+}
+
+// Mantenemos FRANJAS_VALIDAS como alias vacío para no romper imports que lo usen.
+const FRANJAS_VALIDAS = null; // ya no se usa — ver esFranjaValida()
 
 // Mínimo de horas de anticipación: 0 (el cliente puede pedir desde la hora actual)
 const MIN_HORAS_ANTICIPACION = 0;
@@ -73,8 +80,11 @@ const crearPedidoRules = [
 
   body('franjaRecoleccion')
     .optional({ nullable: true, checkFalsy: true })
-    .isIn(FRANJAS_VALIDAS)
-    .withMessage(`Franja inválida. Opciones: ${FRANJAS_VALIDAS.join(', ')}`),
+    .custom((v) => {
+      if (!v) return true;
+      if (!esFranjaValida(v)) throw new Error('Franja inválida. Formato esperado: HH:MM-HH:MM');
+      return true;
+    }),
 
   body('notasCliente')
     .optional({ nullable: true, checkFalsy: true })
@@ -101,8 +111,11 @@ const reprogramarPedidoRules = [
     }),
   body('franjaRecoleccion')
     .optional({ nullable: true, checkFalsy: true })
-    .isIn(FRANJAS_VALIDAS)
-    .withMessage(`Franja inválida. Opciones: ${FRANJAS_VALIDAS.join(', ')}`),
+    .custom((v) => {
+      if (!v) return true;
+      if (!esFranjaValida(v)) throw new Error('Franja inválida. Formato esperado: HH:MM-HH:MM');
+      return true;
+    }),
 ];
 
 module.exports = {
