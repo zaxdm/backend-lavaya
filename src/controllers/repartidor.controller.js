@@ -102,10 +102,12 @@ const pedidosDisponibles = async (req, res, next) => {
 
 // ─── Mis pedidos asignados ────────────────────────────────────
 // GET /api/repartidores/pedidos/mis-pedidos
+// Por defecto devuelve solo los pedidos ACTIVOS (no terminados ni cancelados).
+// Pasar ?todos=1 para incluir historial completo.
 const misPedidos = async (req, res, next) => {
   try {
     const repartidor = await getRepartidor(req.user.id);
-    const { estado } = req.query;
+    const { estado, todos } = req.query;
 
     const where = {
       OR: [
@@ -113,8 +115,12 @@ const misPedidos = async (req, res, next) => {
         { repartidorEntregaId: repartidor.id },
       ],
     };
+
     if (estado) {
       where.estado = estado;
+    } else if (!todos) {
+      // Sin filtros explícitos: solo pedidos activos (excluir terminales)
+      where.estado = { notIn: ['ENTREGADO', 'CANCELADO'] };
     }
 
     const pedidos = await prisma.pedido.findMany({
