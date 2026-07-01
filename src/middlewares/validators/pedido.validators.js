@@ -15,6 +15,7 @@ const FRANJAS_VALIDAS = [
   '14:00-16:00',
   '16:00-18:00',
   '18:00-20:00',
+  '20:00-22:00',
 ];
 
 // Mínimo de horas de anticipación: 0 (el cliente puede pedir desde la hora actual)
