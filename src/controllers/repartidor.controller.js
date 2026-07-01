@@ -79,12 +79,17 @@ const dashboard = async (req, res, next) => {
 
 // ─── Pedidos disponibles para aceptar ────────────────────────
 // GET /api/repartidores/pedidos/disponibles
+// Devuelve dos tipos de pedidos que un repartidor puede tomar:
+//   1. PENDIENTE sin repartidor de recojo  → para recoger en casa del cliente
+//   2. EN_CAMINO sin repartidor de entrega → para entregar al cliente (listos en lavandería)
 const pedidosDisponibles = async (req, res, next) => {
   try {
     const pedidos = await prisma.pedido.findMany({
       where: {
-        estado: 'PENDIENTE',
-        repartidorRecoleccionId: null,
+        OR: [
+          { estado: 'PENDIENTE',  repartidorRecoleccionId: null },
+          { estado: 'EN_CAMINO',  repartidorEntregaId: null     },
+        ],
       },
       include: {
         direccion: true,
@@ -166,72 +171,116 @@ const aceptarPedido = async (req, res, next) => {
     // Verificar que el pedido existe antes de intentar la actualización atómica
     const pedidoExiste = await prisma.pedido.findUnique({
       where: { id: req.params.id },
-      select: { id: true, estado: true, repartidorRecoleccionId: true },
+      select: { id: true, estado: true, repartidorRecoleccionId: true, repartidorEntregaId: true },
     });
     if (!pedidoExiste) {
       return res.status(404).json({ error: 'Pedido no encontrado' });
     }
-    // Pre-check para dar un error más descriptivo si ya está tomado
-    // (el check atómico del UPDATE captura el caso concurrente real)
-    if (pedidoExiste.estado !== 'PENDIENTE') {
-      return res.status(409).json({ error: 'Este pedido ya no está disponible' });
-    }
-    if (pedidoExiste.repartidorRecoleccionId) {
-      return res.status(409).json({ error: 'Este pedido ya fue tomado por otro repartidor' });
-    }
 
-    // ── UPDATE ATÓMICO: condición en el WHERE del update ──────────
-    // Si entre el check anterior y este update otro repartidor se adelantó,
-    // Prisma lanzará PrismaClientKnownRequestError con code P2025
-    // (record not found), que capturamos abajo.
-    let pedidoActualizado;
-    try {
-      pedidoActualizado = await prisma.pedido.update({
-        where: {
-          id: req.params.id,
-          // Condición atómica: solo actualiza si TODAVÍA está en PENDIENTE
-          // sin repartidor asignado
-          estado: 'PENDIENTE',
-          repartidorRecoleccionId: null,
-        },
+    // ── Caso A: aceptar recojo (pedido PENDIENTE) ──────────────────
+    if (pedidoExiste.estado === 'PENDIENTE') {
+      if (pedidoExiste.repartidorRecoleccionId) {
+        return res.status(409).json({ error: 'Este pedido ya fue tomado por otro repartidor' });
+      }
+
+      let pedidoActualizado;
+      try {
+        pedidoActualizado = await prisma.pedido.update({
+          where: {
+            id: req.params.id,
+            estado: 'PENDIENTE',
+            repartidorRecoleccionId: null,
+          },
+          data: {
+            repartidorRecoleccionId: repartidor.id,
+            estado: 'CONFIRMADO',
+          },
+          include: {
+            prendas: true, pago: true, direccion: true,
+            cliente: { select: { nombre: true, apellido: true, telefono: true } },
+          },
+        });
+      } catch (updateErr) {
+        if (updateErr?.code === 'P2025') {
+          return res.status(409).json({
+            error: 'Este pedido acaba de ser tomado por otro repartidor. Intenta con otro pedido.',
+          });
+        }
+        throw updateErr;
+      }
+
+      await prisma.historialPedido.create({
         data: {
-          repartidorRecoleccionId: repartidor.id,
+          id: uuidv4(),
+          pedidoId: req.params.id,
           estado: 'CONFIRMADO',
-        },
-        include: {
-          prendas: true,
-          pago: true,
-          direccion: true,
-          cliente: { select: { nombre: true, apellido: true, telefono: true } },
+          nota: 'Aceptado por repartidor',
+          creadoPor: req.user.id,
         },
       });
-    } catch (updateErr) {
-      // P2025 = "Record to update not found" — otro repartidor se adelantó
-      if (updateErr?.code === 'P2025') {
-        return res.status(409).json({
-          error: 'Este pedido acaba de ser tomado por otro repartidor. Intenta con otro pedido.',
-        });
-      }
-      throw updateErr; // cualquier otro error sube al handler global
+
+      await prisma.repartidor.update({
+        where: { id: repartidor.id },
+        data: { estado: 'OCUPADO' },
+      });
+
+      return res.json({ mensaje: 'Pedido aceptado para recojo', pedido: pedidoActualizado });
     }
 
-    // ── Historial + marcar OCUPADO (no críticos para la atomicidad) ──
-    await prisma.historialPedido.create({
-      data: {
-        id: uuidv4(),
-        pedidoId: req.params.id,
-        estado: 'CONFIRMADO',
-        nota: 'Aceptado por repartidor',
-        creadoPor: req.user.id,
-      },
+    // ── Caso B: aceptar entrega (pedido EN_CAMINO, sin repartidor de entrega) ─
+    if (pedidoExiste.estado === 'EN_CAMINO') {
+      if (pedidoExiste.repartidorEntregaId) {
+        return res.status(409).json({ error: 'Este pedido ya tiene repartidor de entrega asignado' });
+      }
+
+      let pedidoActualizado;
+      try {
+        pedidoActualizado = await prisma.pedido.update({
+          where: {
+            id: req.params.id,
+            estado: 'EN_CAMINO',
+            repartidorEntregaId: null,
+          },
+          data: {
+            repartidorEntregaId: repartidor.id,
+          },
+          include: {
+            prendas: true, pago: true, direccion: true,
+            cliente: { select: { nombre: true, apellido: true, telefono: true } },
+          },
+        });
+      } catch (updateErr) {
+        if (updateErr?.code === 'P2025') {
+          return res.status(409).json({
+            error: 'Este pedido acaba de ser tomado por otro repartidor. Intenta con otro pedido.',
+          });
+        }
+        throw updateErr;
+      }
+
+      await prisma.historialPedido.create({
+        data: {
+          id: uuidv4(),
+          pedidoId: req.params.id,
+          estado: 'EN_CAMINO',
+          nota: 'Repartidor de entrega asignado',
+          creadoPor: req.user.id,
+        },
+      });
+
+      await prisma.repartidor.update({
+        where: { id: repartidor.id },
+        data: { estado: 'OCUPADO' },
+      });
+
+      return res.json({ mensaje: 'Pedido aceptado para entrega', pedido: pedidoActualizado });
+    }
+
+    // ── Estado no aceptable ─────────────────────────────────────────
+    return res.status(409).json({
+      error: `Este pedido no está disponible para aceptar (estado: ${pedidoExiste.estado})`,
     });
 
-    await prisma.repartidor.update({
-      where: { id: repartidor.id },
-      data: { estado: 'OCUPADO' },
-    });
-
-    res.json({ mensaje: 'Pedido aceptado', pedido: pedidoActualizado });
   } catch (err) {
     next(err);
   }
